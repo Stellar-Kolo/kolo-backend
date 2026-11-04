@@ -40,6 +40,7 @@ const prismaMocks = {
     findManyGroups: jest.fn(),
     findManyContributions: jest.fn(),
     create: jest.fn(),
+    findFirstMismatch: jest.fn(),
 };
 
 jest.mock('@prisma/client', () => {
@@ -47,6 +48,7 @@ jest.mock('@prisma/client', () => {
         findManyGroups: jest.fn(),
         findManyContributions: jest.fn(),
         create: jest.fn(),
+        findFirstMismatch: jest.fn(),
     };
     // Expose so tests can configure them via the module
     (global as any).__prismaMocks = mockFns;
@@ -54,7 +56,10 @@ jest.mock('@prisma/client', () => {
         PrismaClient: jest.fn().mockImplementation(() => ({
             savingsGroup: { findMany: (...args: any[]) => (global as any).__prismaMocks.findManyGroups(...args) },
             contribution: { findMany: (...args: any[]) => (global as any).__prismaMocks.findManyContributions(...args) },
-            reconciliationMismatch: { create: (...args: any[]) => (global as any).__prismaMocks.create(...args) },
+            reconciliationMismatch: {
+                create: (...args: any[]) => (global as any).__prismaMocks.create(...args),
+                findFirst: (...args: any[]) => (global as any).__prismaMocks.findFirstMismatch(...args),
+            },
         })),
         Prisma: {
             Decimal: class Decimal {
@@ -71,6 +76,7 @@ function getMocks() {
         findManyGroups: jest.Mock;
         findManyContributions: jest.Mock;
         create: jest.Mock;
+        findFirstMismatch: jest.Mock;
     };
 }
 
@@ -107,10 +113,13 @@ describe('runReconciliation()', () => {
         m.findManyGroups.mockReset();
         m.findManyContributions.mockReset();
         m.create.mockReset();
+        m.findFirstMismatch.mockReset();
         // Safe defaults so tests that don't configure these don't throw
         m.findManyGroups.mockResolvedValue([]);
         m.findManyContributions.mockResolvedValue([]);
         m.create.mockResolvedValue({ id: 'mm_default' });
+        // No pre-existing unresolved mismatch unless a test says otherwise
+        m.findFirstMismatch.mockResolvedValue(null);
         mockSorobanService = {
             queryContribution: jest.fn().mockResolvedValue(0n),
         };
@@ -233,5 +242,70 @@ describe('runReconciliation()', () => {
 
         expect(summary.groupsScanned).toBe(2);
         expect(summary.membersChecked).toBe(2);
+    });
+
+    it('does not flag a member who contributed across multiple completed cycles', async () => {
+        // get_contribution() is lifetime-cumulative: 10 XLM in cycle 1 + 10 XLM
+        // in cycle 2 = 20 XLM on-chain. Comparing that against only "this
+        // cycle"'s DB rows used to produce a false mismatch (issue #1).
+        getMocks().findManyGroups.mockResolvedValue([makeGroup()]);
+        mockSorobanService.queryContribution.mockResolvedValue(200_000_000n); // 20 XLM lifetime
+        getMocks().findManyContributions.mockResolvedValue([
+            { amount: 10 }, // cycle 1, already completed
+            { amount: 10 }, // cycle 2 (current)
+        ]);
+
+        const summary = await runReconciliation(mockSorobanService as any);
+
+        expect(summary.mismatchesFound).toBe(0);
+        expect(getMocks().create).not.toHaveBeenCalled();
+    });
+
+    it('still detects a genuine divergence across multiple cycles', async () => {
+        // Lifetime on-chain total (20 XLM) does not match the lifetime DB total
+        // (10 XLM) — a real mismatch must still surface.
+        getMocks().findManyGroups.mockResolvedValue([makeGroup()]);
+        mockSorobanService.queryContribution.mockResolvedValue(200_000_000n);
+        getMocks().findManyContributions.mockResolvedValue([{ amount: 10 }]);
+
+        const summary = await runReconciliation(mockSorobanService as any);
+
+        expect(summary.mismatchesFound).toBe(1);
+        expect(getMocks().create).toHaveBeenCalledTimes(1);
+    });
+
+    it('excludes members who have left the group from the scan', async () => {
+        await runReconciliation(mockSorobanService as any);
+
+        // Members who left are settled via MemberExitLog, not this worker —
+        // the query must filter them out at the database level.
+        expect(getMocks().findManyGroups).toHaveBeenCalledWith(
+            expect.objectContaining({
+                include: expect.objectContaining({
+                    members: expect.objectContaining({
+                        where: { status: 'ACTIVE' },
+                    }),
+                }),
+            }),
+        );
+    });
+
+    it('is safe to rerun: does not duplicate a row for an already-unresolved mismatch', async () => {
+        getMocks().findManyGroups.mockResolvedValue([makeGroup()]);
+        mockSorobanService.queryContribution.mockResolvedValue(100_000_000n);
+        getMocks().findManyContributions.mockResolvedValue([]);
+        // First run: nothing recorded yet, so it persists a new row.
+        // Second run: that row is now unresolved, so it must not persist another.
+        getMocks().findFirstMismatch
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce({ id: 'mm1', resolvedAt: null });
+
+        const first = await runReconciliation(mockSorobanService as any);
+        const second = await runReconciliation(mockSorobanService as any);
+
+        expect(first.mismatchesFound).toBe(1);
+        expect(second.mismatchesFound).toBe(1);
+        // Still observed and counted in both summaries, but only persisted once.
+        expect(getMocks().create).toHaveBeenCalledTimes(1);
     });
 });

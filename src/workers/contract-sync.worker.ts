@@ -3,8 +3,9 @@
  *
  * Runs every 5 minutes.  For every active SavingsGroup that has a deployed
  * Soroban contract, it:
- *   1. Fetches each member's on-chain contribution via get_contribution().
- *   2. Sums the COMPLETED Contribution records in the current DB cycle.
+ *   1. Fetches each member's on-chain contribution via get_contribution(),
+ *      a lifetime-cumulative total.
+ *   2. Sums that member's COMPLETED Contribution records across all cycles.
  *   3. Flags any divergence as a ReconciliationMismatch record.
  *   4. Does NOT auto-fix — mismatches require admin review.
  *
@@ -20,6 +21,7 @@ import { SorobanService } from '../services/soroban.service';
 import { observabilityService } from '../services/observability.service';
 import { scheduleReconciliation, getContractSyncQueue } from '../queue/contract-sync.queue';
 import { applyEncryptionMiddleware } from '../middleware/prisma-encryption.middleware';
+import { xlmToStroops } from '../utils/stellar-amount.util';
 
 const prisma = new PrismaClient();
 applyEncryptionMiddleware(prisma);
@@ -75,7 +77,12 @@ export async function runReconciliation(sorobanService: SorobanService): Promise
             stellarContractId: { not: null },
         },
         include: {
+            // Members who have left are excluded: remove_member() refunds and
+            // zeroes their on-chain total_contributions, and their settlement
+            // is already recorded in MemberExitLog, so they are not comparable
+            // against an ongoing DB total here.
             members: {
+                where: { status: 'ACTIVE' },
                 include: { user: true },
             },
         },
@@ -85,11 +92,6 @@ export async function runReconciliation(sorobanService: SorobanService): Promise
 
     for (const group of groups) {
         const contractId = group.stellarContractId!;
-
-        // Determine the current cycle window for DB lookups.
-        // Fall back to the beginning of time if no cycle has started yet.
-        const cycleStart = group.currentCycleStart ?? new Date(0);
-        const cycleEnd = group.currentCycleEnd ?? new Date();
 
         for (const membership of group.members) {
             const member = membership.user;
@@ -121,22 +123,43 @@ export async function runReconciliation(sorobanService: SorobanService): Promise
                 continue;
             }
 
-            // 2. Sum COMPLETED DB contributions for this member in the current cycle
-            const dbContributions = await prisma.contribution.findMany({
-                where: {
-                    userId: member.id,
+            // 2. Sum ALL completed DB contributions for this member, across every
+            // cycle — not just the current one. The contract's get_contribution()
+            // returns a lifetime-cumulative total_contributions, so comparing it
+            // against a single-cycle DB window produced a false mismatch for any
+            // member who had already contributed in an earlier, completed cycle.
+            //
+            // Withdrawals and emergency-withdraws are not reachable through any
+            // current backend flow (handleWithdraw() is a stub that never invokes
+            // the contract), so they are not modeled as debits here. A member who
+            // has exited is excluded from this scan entirely (see the query
+            // above) rather than modeled as a refund debit, since remove_member()
+            // zeroes their on-chain total and their settlement is already
+            // recorded in MemberExitLog.
+            //
+            // Each row is converted individually with xlmToStroops (exact
+            // string/integer arithmetic) and summed as bigint, so this side of
+            // the comparison never passes through floating point either.
+            let dbStroops: bigint;
+            try {
+                const dbContributions = await prisma.contribution.findMany({
+                    where: {
+                        userId: member.id,
+                        groupId: group.id,
+                        status: 'COMPLETED',
+                    },
+                });
+                dbStroops = dbContributions.reduce((acc, c) => acc + xlmToStroops(String(c.amount)), 0n);
+            } catch (err: any) {
+                summary.errors.push(
+                    `[group=${group.id}] failed to total DB contributions for user ${member.id}: ${err.message}`,
+                );
+                observabilityService.logError('ReconciliationWorker: DB aggregation error', err, {
                     groupId: group.id,
-                    status: 'COMPLETED',
-                    createdAt: { gte: cycleStart, lte: cycleEnd },
-                },
-            });
-
-            const dbTotalXlm = dbContributions.reduce(
-                (acc, c) => acc + Number(c.amount),
-                0,
-            );
-            // Convert DB amount (XLM) to stroops for comparison
-            const dbStroops = BigInt(Math.round(dbTotalXlm * 10_000_000));
+                    userId: member.id,
+                });
+                continue;
+            }
 
             // 3. Compare — allow a 1-stroop tolerance for floating-point rounding
             if (onChainStroops === dbStroops || Math.abs(Number(onChainStroops - dbStroops)) <= 1) {
@@ -147,16 +170,25 @@ export async function runReconciliation(sorobanService: SorobanService): Promise
             summary.mismatchesFound++;
 
             const onChainXlm = new Prisma.Decimal(Number(onChainStroops) / 10_000_000);
-            const dbXlm = new Prisma.Decimal(dbTotalXlm);
+            const dbXlm = new Prisma.Decimal(Number(dbStroops) / 10_000_000);
 
-            await prisma.reconciliationMismatch.create({
-                data: {
-                    groupId: group.id,
-                    userId: member.id,
-                    onChainAmount: onChainXlm,
-                    dbAmount: dbXlm,
-                },
+            // Re-running every 5 minutes must not keep piling up rows for the
+            // same ongoing, unresolved divergence — only persist a new record
+            // if this member doesn't already have one awaiting admin review.
+            const existingUnresolved = await prisma.reconciliationMismatch.findFirst({
+                where: { groupId: group.id, userId: member.id, resolvedAt: null },
             });
+
+            if (!existingUnresolved) {
+                await prisma.reconciliationMismatch.create({
+                    data: {
+                        groupId: group.id,
+                        userId: member.id,
+                        onChainAmount: onChainXlm,
+                        dbAmount: dbXlm,
+                    },
+                });
+            }
 
             observabilityService.logError(
                 'RECONCILIATION_MISMATCH',
