@@ -125,6 +125,19 @@ export class GroupService {
         });
     }
 
+    public async addWithdrawal(userId: string, groupId: string, amount: string | Prisma.Decimal, txHash: string, status: 'COMPLETED' | 'PENDING' | 'FAILED' = 'COMPLETED') {
+        GroupService.validateAmount(amount);
+        return await prisma.withdrawal.create({
+            data: {
+                userId,
+                groupId,
+                amount,
+                transactionHash: txHash,
+                status,
+            }
+        });
+    }
+
     public async getContributionsByUser(userId: string) {
         return await prisma.contribution.findMany({
             where: { userId }

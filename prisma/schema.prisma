@@ -24,6 +24,7 @@ model User {
   updatedAt               DateTime         @updatedAt
   groups                  GroupMember[]
   contributions           Contribution[]
+  withdrawals             Withdrawal[]
   sentPaymentRequests     PaymentRequest[] @relation("PaymentRequestRequester")
   receivedPaymentRequests PaymentRequest[] @relation("PaymentRequestResponder")
 }
@@ -40,6 +41,12 @@ model SavingsGroup {
   name                   String
   contributionAmount     Decimal
   contributionFrequency  String // e.g., "WEEKLY", "MONTHLY"
+  // Mirrors the Soroban contract's GroupType enum, passed to initialize().
+  // Every group created through the current WhatsApp flow is "Rotational";
+  // "GoalBased" is modeled here and on-chain but has no creation UX yet.
+  groupType              String           @default("Rotational")
+  targetAmount           Decimal? // GoalBased only; mirrors contract's target_amount
+  lockUntilTarget        Boolean          @default(false)
   stellarContractId      String? // Soroban contract ID once deployed
   deploymentStatus       DeploymentStatus @default(PENDING)
   deploymentError        String?
@@ -83,6 +90,23 @@ model GroupMember {
 }
 
 model Contribution {
+  id              String   @id @default(uuid())
+  user            User     @relation(fields: [userId], references: [id])
+  userId          String
+  groupId         String
+  amount          Decimal
+  transactionHash String?
+  status          String   @default("PENDING") // PENDING, COMPLETED, FAILED
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
+  @@index([groupId])
+}
+
+// GoalBased groups only — tracks withdraw_savings() calls so the
+// reconciliation worker can subtract them from the DB-side contribution
+// total, mirroring the on-chain total_contributions decrement.
+model Withdrawal {
   id              String   @id @default(uuid())
   user            User     @relation(fields: [userId], references: [id])
   userId          String
