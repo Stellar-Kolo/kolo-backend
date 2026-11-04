@@ -53,7 +53,7 @@
   "group_status": {
     "no_groups": "Ị nọghị n'otu ọ bụla.",
     "header": "*Otu Gị Ndị A:*\n\n",
-    "entry": "*{{name}}*\nEbumnuche: {{amount}} XLM ({{frequency}})\nỌrụ: {{role}}\nNdị Otu: {{count}}\n\n"
+    "entry": "*{{name}}*\nEbumnuche: {{amount}} USDC ({{frequency}})\nỌrụ: {{role}}\nNdị Otu: {{count}}\n\n"
   },
   "payout": {
     "usage": "Ojiji: PAYOUT <ORDER|STATUS|WAIT|PROCEED|SKIP>",
@@ -76,10 +76,12 @@
   "contribute": {
     "usage": "Ojiji: CONTRIBUTE <ọnụọgụ>",
     "no_group": "Njehie: Ị nọghị n'otu ọ bụla.",
-    "amount_mismatch": "❌ Ntinye ụtụ ga-abụ kpọmkwem {{required}} XLM dịka otu a chọrọ.",
-    "initiating": "[CONTRIBUTE] Na-ebido ntinye ụtụ nke {{amount}} XLM na \"{{groupName}}\"...",
-    "success": "✅ Etinyere {{amount}} XLM na \"{{groupName}}\" nke ọma!",
-    "failed": "❌ Ntinye ụtụ adaala: {{message}}"
+    "amount_mismatch": "❌ Ntinye ụtụ ga-abụ kpọmkwem {{required}} USDC dịka otu a chọrọ.",
+    "initiating": "[CONTRIBUTE] Na-ebido ntinye ụtụ nke {{amount}} USDC na \"{{groupName}}\"...",
+    "success": "✅ Etinyere {{amount}} USDC na \"{{groupName}}\" nke ọma!",
+    "failed": "❌ Ntinye ụtụ adaala: {{message}}",
+    "pending": "⏳ Ezigara ntinye ụtụ — na-eche nkwenye na ụdọ nkeji (tx: {{hash}}). A ga-agwa gị mgbe o kwadoro.",
+    "failed_onchain": "❌ Ntinye ụtụ dara na ụdọ nkeji: {{message}}"
   },
   "validation": {
     "invalid_format": "❌ Ụdị ọnụọgụ adịghị mma. Biko tinye nọmba karịrị efu (dịka, 10 ma ọ bụ 10.50).",
@@ -90,7 +92,12 @@
   "withdraw": {
     "usage": "Ojiji: WITHDRAW <ọnụọgụ>",
     "no_group": "Njehie: Ị nọghị n'otu ọ bụla.",
-    "success": "✅ Ewepụtara {{amount}} XLM na nchekwa \"{{groupName}}\" nke ọma! (MOCKED)"
+    "success": "✅ Ewepụtara {{amount}} USDC na nchekwa \"{{groupName}}\" nke ọma!",
+    "not_goalbased": "❌ \"{{groupName}}\" bụ otu ntụgharị — mwepu dị naanị maka otu nchekwa ebumnuche.",
+    "initiating": "[MWEPU] Na-ebido mwepu nke {{amount}} USDC na nchekwa \"{{groupName}}\"...",
+    "pending": "⏳ Ezigara arịrịọ mwepu — na-eche nkwenye na ụdọ nkeji (tx: {{hash}}). A ga-agwa gị mgbe o kwadoro.",
+    "failed_onchain": "❌ Mwepu dara na ụdọ nkeji: {{message}}",
+    "failed": "❌ Mwepu dara: {{message}}"
   },
   "help": {
     "text": "*Iwu Kolo:*\n\n_Akaụntụ_\nBALANCE\nBALANCE <akụ>\nHISTORY\nPROFILE\n\n_Ịkwụ Ụgwọ_\nSEND <ọnụọgụ> <@onye_ọrụ>\nREQUEST <ọnụọgụ> <@onye_ọrụ>\n\n_Otu Nchekwa Ego_\nCREATE GROUP <aha> <ọnụọgụ> <oge>\nJOIN GROUP <groupId>\nINVITE MEMBER <@onye_ọrụ>\nGROUP STATUS\nCONTRIBUTE <ọnụọgụ>\nWITHDRAW <ọnụọgụ>\n\n_Usoro Ịkwụ Ụgwọ_\nPAYOUT ORDER <@onye_ọrụ1> <@onye_ọrụ2> ...\nPAYOUT STATUS\nPAYOUT WAIT\nPAYOUT PROCEED\nPAYOUT SKIP <@onye_ọrụ>\n\n_Nkwado_\nHELP\nSUPPORT"

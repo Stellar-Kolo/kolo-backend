@@ -933,10 +933,90 @@ export class MessageProcessor {
         }
 
         const group = memberships[0].group;
-        await this.whatsappService.sendMessage(
-            from,
-            t('withdraw.success', lang, { amount: amountStr, groupName: group.name }),
-        );
+
+        // withdraw_savings() panics on-chain for Rotational groups — each
+        // cycle's pool is paid out in full to that cycle's one recipient as
+        // soon as it's collected, so there's no personal balance to reclaim.
+        if ((group as any).groupType !== 'GoalBased') {
+            return await this.whatsappService.sendMessage(
+                from,
+                t('withdraw.not_goalbased', lang, { groupName: group.name }),
+            );
+        }
+
+        if (!user.stellarWallet) {
+            return await this.whatsappService.sendMessage(from, t('send.no_wallet', lang));
+        }
+        if (!group.stellarContractId) {
+            return await this.whatsappService.sendMessage(from, t('error.generic', lang, { message: 'Group has no Soroban contract configured.' }));
+        }
+
+        const senderWallet = JSON.parse(user.stellarWallet);
+        let senderSecret: Buffer | null = null;
+
+        try {
+            senderSecret = decrypt(senderWallet.encryptedSecret, senderWallet.iv, senderWallet.authTag, senderWallet.keyVersion || user.encryptionKeyVersion);
+            registerSecret(senderSecret);
+
+            const memberKeypair = StellarSdk.Keypair.fromRawEd25519Seed(senderSecret);
+            const memberPublicKey = memberKeypair.publicKey();
+
+            const amountStroops = xlmToStroops(amountStr);
+
+            await this.whatsappService.sendMessage(
+                from,
+                t('withdraw.initiating', lang, { amount: amountStr, groupName: group.name }),
+            );
+
+            // ── Contract-first withdrawal flow ────────────────────────────────
+            // Same pattern as handleContribute(): invoke withdraw_savings()
+            // and only write the DB record after on-chain confirmation, so
+            // the reconciliation worker (which now subtracts completed
+            // Withdrawal rows from the DB total) stays consistent with the
+            // contract's own total_contributions decrement.
+            const { hash: txHash, status } = await this.sorobanService.withdrawSavings(
+                memberKeypair,
+                group.stellarContractId,
+                memberPublicKey,
+                amountStroops,
+            );
+
+            if (status === 'PENDING') {
+                await this.groupService.addWithdrawal(user.id, group.id, amountStr, txHash, 'PENDING');
+                await this.whatsappService.sendMessage(
+                    from,
+                    t('withdraw.pending', lang, { hash: txHash }),
+                );
+                await logSecretAccess(user.id, 'WITHDRAW', false, 'Transaction pending confirmation');
+                return;
+            }
+
+            await this.groupService.addWithdrawal(user.id, group.id, amountStr, txHash);
+            await this.whatsappService.sendMessage(
+                from,
+                t('withdraw.success', lang, { amount: amountStr, groupName: group.name }),
+            );
+            await logSecretAccess(user.id, 'WITHDRAW', true);
+        } catch (e: any) {
+            const isTxFailed = e?.message?.includes('Transaction failed on ledger');
+            if (isTxFailed) {
+                await this.whatsappService.sendMessage(
+                    from,
+                    t('withdraw.failed_onchain', lang, { message: e.message }),
+                );
+            } else {
+                await this.whatsappService.sendMessage(
+                    from,
+                    t('withdraw.failed', lang, { message: e.message }),
+                );
+            }
+            await logSecretAccess(user.id, 'WITHDRAW', false, e.message);
+        } finally {
+            if (senderSecret) {
+                unregisterSecret(senderSecret);
+                senderSecret.fill(0);
+            }
+        }
     }
 
     private async handleHelp(from: string) {

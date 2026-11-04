@@ -53,7 +53,7 @@
     "group_status": {
         "no_groups": "You are not part of any groups.",
         "header": "*Your Groups:*\n\n",
-        "entry": "*{{name}}*\nTarget: {{amount}} XLM ({{frequency}})\nRole: {{role}}\nMembers: {{count}}\n\n"
+        "entry": "*{{name}}*\nTarget: {{amount}} USDC ({{frequency}})\nRole: {{role}}\nMembers: {{count}}\n\n"
     },
     "leave_group": {
         "usage": "Usage: LEAVE GROUP <groupId>",
@@ -95,11 +95,13 @@
     "contribute": {
         "usage": "Usage: CONTRIBUTE <amount>",
         "no_group": "Error: You are not part of any group.",
-        "amount_mismatch": "❌ Contribution must be exactly {{required}} XLM as required by this group.",
+        "amount_mismatch": "❌ Contribution must be exactly {{required}} USDC as required by this group.",
         "group_paused": "❌ \"{{groupName}}\" is paused — it needs at least 2 members before contributions can resume.",
-        "initiating": "[CONTRIBUTE] Initiating contribution of {{amount}} XLM to \"{{groupName}}\"...",
-        "success": "✅ Successfully contributed {{amount}} XLM to \"{{groupName}}\"!",
-        "failed": "❌ Contribution failed: {{message}}"
+        "initiating": "[CONTRIBUTE] Initiating contribution of {{amount}} USDC to \"{{groupName}}\"...",
+        "success": "✅ Successfully contributed {{amount}} USDC to \"{{groupName}}\"!",
+        "failed": "❌ Contribution failed: {{message}}",
+        "pending": "⏳ Contribution submitted — waiting for on-chain confirmation (tx: {{hash}}). You will be notified once it lands.",
+        "failed_onchain": "❌ Contribution failed on-chain: {{message}}"
     },
     "validation": {
         "invalid_format": "❌ Invalid amount format. Please enter a positive number (e.g., 10 or 10.50).",
@@ -110,7 +112,12 @@
     "withdraw": {
         "usage": "Usage: WITHDRAW <amount>",
         "no_group": "Error: You are not part of any group.",
-        "success": "✅ Successfully withdrew {{amount}} XLM from \"{{groupName}}\" pool! (MOCKED)"
+        "success": "✅ Successfully withdrew {{amount}} USDC from \"{{groupName}}\" pool!",
+        "not_goalbased": "❌ \"{{groupName}}\" is a rotational group — withdrawals are only available for goal-based savings groups.",
+        "initiating": "[WITHDRAW] Initiating withdrawal of {{amount}} USDC from \"{{groupName}}\"...",
+        "pending": "⏳ Withdrawal submitted — waiting for on-chain confirmation (tx: {{hash}}). You will be notified once it lands.",
+        "failed_onchain": "❌ Withdrawal failed on-chain: {{message}}",
+        "failed": "❌ Withdrawal failed: {{message}}"
     },
     "help": {
         "text": "*Kolo Commands:*\n\n_Account_\nBALANCE\nBALANCE <asset>\nHISTORY\nPROFILE\n\n_Payments_\nSEND <amount> <@user>\nREQUEST <amount> <@user>\n\n_Savings Groups_\nCREATE GROUP <name> <amount> <frequency>\nJOIN GROUP <groupId>\nINVITE MEMBER <@user>\nGROUP STATUS\nCONTRIBUTE <amount>\nWITHDRAW <amount>\nLEAVE GROUP <groupId>\nKICK <@user> <groupId>\n\n_Payout Rotation_\nPAYOUT ORDER <@user1> <@user2> ...\nPAYOUT STATUS\nPAYOUT WAIT\nPAYOUT PROCEED\nPAYOUT SKIP <@user>\n\n_Support_\nHELP\nSUPPORT"

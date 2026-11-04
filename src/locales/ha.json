@@ -53,7 +53,7 @@
   "group_status": {
     "no_groups": "Ba ka cikin kowane rukuni.",
     "header": "*Rukunin Ku:*\n\n",
-    "entry": "*{{name}}*\nBuri: {{amount}} XLM ({{frequency}})\nMatsayi: {{role}}\nMambobi: {{count}}\n\n"
+    "entry": "*{{name}}*\nBuri: {{amount}} USDC ({{frequency}})\nMatsayi: {{role}}\nMambobi: {{count}}\n\n"
   },
   "payout": {
     "usage": "Amfani: PAYOUT <ORDER|STATUS|WAIT|PROCEED|SKIP>",
@@ -76,10 +76,12 @@
   "contribute": {
     "usage": "Amfani: CONTRIBUTE <adadi>",
     "no_group": "Kuskure: Ba ka cikin kowane rukuni.",
-    "amount_mismatch": "❌ Dole gudummawa ta zama daidai {{required}} XLM yadda rukunin nan ke bukata.",
-    "initiating": "[CONTRIBUTE] Ana farawa bada gudummawa ta {{amount}} XLM ga \"{{groupName}}\"...",
-    "success": "✅ An yi nasarar bada gudummawar {{amount}} XLM ga \"{{groupName}}\"!",
-    "failed": "❌ Bada gudummawa bai yi nasara ba: {{message}}"
+    "amount_mismatch": "❌ Dole gudummawa ta zama daidai {{required}} USDC yadda rukunin nan ke bukata.",
+    "initiating": "[CONTRIBUTE] Ana farawa bada gudummawa ta {{amount}} USDC ga \"{{groupName}}\"...",
+    "success": "✅ An yi nasarar bada gudummawar {{amount}} USDC ga \"{{groupName}}\"!",
+    "failed": "❌ Bada gudummawa bai yi nasara ba: {{message}}",
+    "pending": "⏳ An aika gudummawar — ana jiran tabbatarwa a sarkar (tx: {{hash}}). Za a sanar da kai idan ta tabbata.",
+    "failed_onchain": "❌ Gudummawa ta kasa a sarkar: {{message}}"
   },
   "validation": {
     "invalid_format": "❌ Tsarin adadi ba daidai bane. Don Allah sa lambar da ta wuce sifili (misali, 10 ko 10.50).",
@@ -90,7 +92,12 @@
   "withdraw": {
     "usage": "Amfani: WITHDRAW <adadi>",
     "no_group": "Kuskure: Ba ka cikin kowane rukuni.",
-    "success": "✅ An yi nasarar cire {{amount}} XLM daga asusun \"{{groupName}}\"! (MOCKED)"
+    "success": "✅ An yi nasarar cire {{amount}} USDC daga asusun \"{{groupName}}\"!",
+    "not_goalbased": "❌ \"{{groupName}}\" rukuni ne na jujjuyawa — cire kudi na kasance kawai ga rukunin ajiya masu manufa.",
+    "initiating": "[CIRE KUDI] Ana farawa cire {{amount}} USDC daga asusun \"{{groupName}}\"...",
+    "pending": "⏳ An aika neman cire kudi — ana jiran tabbatarwa a sarkar (tx: {{hash}}). Za a sanar da kai idan ta tabbata.",
+    "failed_onchain": "❌ Cire kudi ya kasa a sarkar: {{message}}",
+    "failed": "❌ Cire kudi ya kasa: {{message}}"
   },
   "help": {
     "text": "*Umarnin Kolo:*\n\n_Asusu_\nBALANCE\nBALANCE <kadari>\nHISTORY\nPROFILE\n\n_Biyan Kudi_\nSEND <adadi> <@mai_amfani>\nREQUEST <adadi> <@mai_amfani>\n\n_Rukunin Ajiya_\nCREATE GROUP <suna> <adadi> <lokaci>\nJOIN GROUP <groupId>\nINVITE MEMBER <@mai_amfani>\nGROUP STATUS\nCONTRIBUTE <adadi>\nWITHDRAW <adadi>\n\n_Zagayen Biyan Kudi_\nPAYOUT ORDER <@mai_amfani1> <@mai_amfani2> ...\nPAYOUT STATUS\nPAYOUT WAIT\nPAYOUT PROCEED\nPAYOUT SKIP <@mai_amfani>\n\n_Taimako_\nHELP\nSUPPORT"

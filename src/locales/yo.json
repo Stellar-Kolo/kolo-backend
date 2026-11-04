@@ -44,7 +44,7 @@
   "group_status": {
     "no_groups": "Ìwọ kò jẹ́ apá ẹgbẹ́ kankan.",
     "header": "*Àwọn Ẹgbẹ́ Rẹ:*\n\n",
-    "entry": "*{{name}}*\nÀfojúsùn: {{amount}} XLM ({{frequency}})\nÌpò: {{role}}\nÀwọn Ọmọ Ẹgbẹ́: {{count}}\n\n"
+    "entry": "*{{name}}*\nÀfojúsùn: {{amount}} USDC ({{frequency}})\nÌpò: {{role}}\nÀwọn Ọmọ Ẹgbẹ́: {{count}}\n\n"
   },
   "payout": {
     "usage": "Lílo: PAYOUT <ORDER|STATUS|WAIT|PROCEED|SKIP>",
@@ -67,10 +67,12 @@
   "contribute": {
     "usage": "Lílo: CONTRIBUTE <iye>",
     "no_group": "Aṣiṣe: Ìwọ kò jẹ́ apá ẹgbẹ́ kankan.",
-    "amount_mismatch": "❌ Ìdásọwọ gbọdọ̀ jẹ́ {{required}} XLM gẹ́gẹ́ bí ẹgbẹ́ yìí ṣe nílò.",
-    "initiating": "[ÌLỌSIWÁJÚ] Nfilọ ìdásọwọ {{amount}} XLM sí \"{{groupName}}\"...",
-    "success": "✅ Ìdásọwọ {{amount}} XLM sí \"{{groupName}}\" ti ṣeyọrí!",
-    "failed": "❌ Ìdásọwọ kùnà: {{message}}"
+    "amount_mismatch": "❌ Ìdásọwọ gbọdọ̀ jẹ́ {{required}} USDC gẹ́gẹ́ bí ẹgbẹ́ yìí ṣe nílò.",
+    "initiating": "[ÌLỌSIWÁJÚ] Nfilọ ìdásọwọ {{amount}} USDC sí \"{{groupName}}\"...",
+    "success": "✅ Ìdásọwọ {{amount}} USDC sí \"{{groupName}}\" ti ṣeyọrí!",
+    "failed": "❌ Ìdásọwọ kùnà: {{message}}",
+    "pending": "⏳ Ìdásọwọ ti fi ránṣẹ́ — ń dúró de ìjẹ́rìísí lórí ẹ̀wọ̀n (tx: {{hash}}). A óò fi tí ọ lẹ́yìn tí ó bá jẹ́rìísí.",
+    "failed_onchain": "❌ Ìdásọwọ kùnà lórí ẹ̀wọ̀n: {{message}}"
   },
   "validation": {
     "invalid_format": "❌ Ìpínsẹ iye kò tọ. Jọ̀wọ́ tẹ nọ́mbà tó dára (bí àpẹẹrẹ, 10 tabi 10.50).",
@@ -81,7 +83,12 @@
   "withdraw": {
     "usage": "Lílo: WITHDRAW <iye>",
     "no_group": "Aṣiṣe: Ìwọ kò jẹ́ apá ẹgbẹ́ kankan.",
-    "success": "✅ Yíyọ {{amount}} XLM kúrò nínú \"{{groupName}}\" ti ṣeyọrí! (ADANWÒ)"
+    "success": "✅ Yíyọ {{amount}} USDC kúrò nínú \"{{groupName}}\" ti ṣeyọrí!",
+    "not_goalbased": "❌ \"{{groupName}}\" jẹ́ ẹgbẹ́ yíyí — yíyọ owó kúrò wà fún àwọn ẹgbẹ́ ìkójọpọ̀ afojusun nìkan.",
+    "initiating": "[YÍYỌ] Nfilọ yíyọ {{amount}} USDC kúrò nínú \"{{groupName}}\"...",
+    "pending": "⏳ Ìbéèrè yíyọ owó ti fi ránṣẹ́ — ń dúró de ìjẹ́rìísí lórí ẹ̀wọ̀n (tx: {{hash}}). A óò fi tí ọ lẹ́yìn tí ó bá jẹ́rìísí.",
+    "failed_onchain": "❌ Yíyọ owó kùnà lórí ẹ̀wọ̀n: {{message}}",
+    "failed": "❌ Yíyọ owó kùnà: {{message}}"
   },
   "help": {
     "text": "*Àwọn Àṣẹ Kolo:*\n\n_Àkọọlẹ_\nBALANCE\nBALANCE <asset>\nHISTORY\nPROFILE\n\n_Àwọn Ìsanwó_\nSEND <iye> <@olùmúlò>\nREQUEST <iye> <@olùmúlò>\n\n_Àwọn Ẹgbẹ́ Ìfowópamọ́_\nCREATE GROUP <orúkọ> <iye> <ìgbà>\nJOIN GROUP <groupId>\nINVITE MEMBER <@olùmúlò>\nGROUP STATUS\nCONTRIBUTE <iye>\nWITHDRAW <iye>\n\n_Ìyípo Ìsanwó_\nPAYOUT ORDER <@olùmúlò1> <@olùmúlò2> ...\nPAYOUT STATUS\nPAYOUT WAIT\nPAYOUT PROCEED\nPAYOUT SKIP <@olùmúlò>\n\n_Ìrànlọ́wọ́_\nHELP\nSUPPORT"

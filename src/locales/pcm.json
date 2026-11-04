@@ -53,7 +53,7 @@
   "group_status": {
     "no_groups": "You no dey any group.",
     "header": "*Your Groups:*\n\n",
-    "entry": "*{{name}}*\nTarget: {{amount}} XLM ({{frequency}})\nRole: {{role}}\nMembers: {{count}}\n\n"
+    "entry": "*{{name}}*\nTarget: {{amount}} USDC ({{frequency}})\nRole: {{role}}\nMembers: {{count}}\n\n"
   },
   "payout": {
     "usage": "How to use: PAYOUT <ORDER|STATUS|WAIT|PROCEED|SKIP>",
@@ -76,10 +76,12 @@
   "contribute": {
     "usage": "How to use: CONTRIBUTE <amount>",
     "no_group": "Error: You no dey any group.",
-    "amount_mismatch": "❌ Contribution must be exactly {{required}} XLM as the group require.",
-    "initiating": "[CONTRIBUTE] We dey try contribute {{amount}} XLM go \"{{groupName}}\"...",
-    "success": "✅ You don successfully contribute {{amount}} XLM go \"{{groupName}}\"!",
-    "failed": "❌ Contribution fail: {{message}}"
+    "amount_mismatch": "❌ Contribution must be exactly {{required}} USDC as the group require.",
+    "initiating": "[CONTRIBUTE] We dey try contribute {{amount}} USDC go \"{{groupName}}\"...",
+    "success": "✅ You don successfully contribute {{amount}} USDC go \"{{groupName}}\"!",
+    "failed": "❌ Contribution fail: {{message}}",
+    "pending": "⏳ We don send di contribution — we dey wait for chain confirm am (tx: {{hash}}). We go tell you once e land.",
+    "failed_onchain": "❌ Contribution fail for chain: {{message}}"
   },
   "validation": {
     "invalid_format": "❌ Invalid amount format. Abeg enter positive number (e.g., 10 or 10.50).",
@@ -90,7 +92,12 @@
   "withdraw": {
     "usage": "How to use: WITHDRAW <amount>",
     "no_group": "Error: You no dey any group.",
-    "success": "✅ You don successfully withdraw {{amount}} XLM from \"{{groupName}}\"! (MOCKED)"
+    "success": "✅ You don successfully withdraw {{amount}} USDC from \"{{groupName}}\"!",
+    "not_goalbased": "❌ \"{{groupName}}\" na rotational group — withdraw dey only available for goal-based savings group.",
+    "initiating": "[WITHDRAW] We dey try withdraw {{amount}} USDC from \"{{groupName}}\"...",
+    "pending": "⏳ We don send di withdraw request — we dey wait for chain confirm am (tx: {{hash}}). We go tell you once e land.",
+    "failed_onchain": "❌ Withdraw fail for chain: {{message}}",
+    "failed": "❌ Withdraw fail: {{message}}"
   },
   "help": {
     "text": "*Kolo Commands:*\n\n_Account_\nBALANCE\nBALANCE <asset>\nHISTORY\nPROFILE\n\n_Payments_\nSEND <amount> <@user>\nREQUEST <amount> <@user>\n\n_Savings Groups_\nCREATE GROUP <name> <amount> <frequency>\nJOIN GROUP <groupId>\nINVITE MEMBER <@user>\nGROUP STATUS\nCONTRIBUTE <amount>\nWITHDRAW <amount>\n\n_Payout Rotation_\nPAYOUT ORDER <@user1> <@user2> ...\nPAYOUT STATUS\nPAYOUT WAIT\nPAYOUT PROCEED\nPAYOUT SKIP <@user>\n\n_Support_\nHELP\nSUPPORT"

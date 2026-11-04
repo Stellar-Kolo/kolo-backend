@@ -44,7 +44,7 @@
   "group_status": {
     "no_groups": "Vous ne faites partie d'aucun groupe.",
     "header": "*Vos Groupes :*\n\n",
-    "entry": "*{{name}}*\nObjectif : {{amount}} XLM ({{frequency}})\nRôle : {{role}}\nMembres : {{count}}\n\n"
+    "entry": "*{{name}}*\nObjectif : {{amount}} USDC ({{frequency}})\nRôle : {{role}}\nMembres : {{count}}\n\n"
   },
   "payout": {
     "usage": "Utilisation : PAYOUT <ORDER|STATUS|WAIT|PROCEED|SKIP>",
@@ -67,10 +67,12 @@
   "contribute": {
     "usage": "Utilisation : CONTRIBUTE <montant>",
     "no_group": "Erreur : Vous ne faites partie d'aucun groupe.",
-    "amount_mismatch": "❌ La cotisation doit être exactement {{required}} XLM comme l'exige ce groupe.",
-    "initiating": "[COTISATION] Initiation de la cotisation de {{amount}} XLM pour \"{{groupName}}\"...",
-    "success": "✅ {{amount}} XLM cotisés avec succès dans \"{{groupName}}\" !",
-    "failed": "❌ Échec de la cotisation : {{message}}"
+    "amount_mismatch": "❌ La cotisation doit être exactement {{required}} USDC comme l'exige ce groupe.",
+    "initiating": "[COTISATION] Initiation de la cotisation de {{amount}} USDC pour \"{{groupName}}\"...",
+    "success": "✅ {{amount}} USDC cotisés avec succès dans \"{{groupName}}\" !",
+    "failed": "❌ Échec de la cotisation : {{message}}",
+    "pending": "⏳ Cotisation soumise — en attente de confirmation sur la chaîne (tx : {{hash}}). Vous serez notifié dès confirmation.",
+    "failed_onchain": "❌ Échec de la cotisation sur la chaîne : {{message}}"
   },
   "validation": {
     "invalid_format": "❌ Format de montant invalide. Veuillez entrer un nombre positif (par ex. 10 ou 10.50).",
@@ -81,7 +83,12 @@
   "withdraw": {
     "usage": "Utilisation : WITHDRAW <montant>",
     "no_group": "Erreur : Vous ne faites partie d'aucun groupe.",
-    "success": "✅ {{amount}} XLM retirés avec succès du pool \"{{groupName}}\" ! (SIMULÉ)"
+    "success": "✅ {{amount}} USDC retirés avec succès du pool \"{{groupName}}\" !",
+    "not_goalbased": "❌ \"{{groupName}}\" est un groupe rotatif — les retraits ne sont disponibles que pour les groupes d’épargne à objectif.",
+    "initiating": "[RETRAIT] Initiation du retrait de {{amount}} USDC du pool \"{{groupName}}\"...",
+    "pending": "⏳ Retrait soumis — en attente de confirmation sur la chaîne (tx : {{hash}}). Vous serez notifié dès confirmation.",
+    "failed_onchain": "❌ Échec du retrait sur la chaîne : {{message}}",
+    "failed": "❌ Échec du retrait : {{message}}"
   },
   "help": {
     "text": "*Commandes Kolo :*\n\n_Compte_\nBALANCE\nBALANCE <actif>\nHISTORY\nPROFILE\n\n_Paiements_\nSEND <montant> <@utilisateur>\nREQUEST <montant> <@utilisateur>\n\n_Groupes d'épargne_\nCREATE GROUP <nom> <montant> <fréquence>\nJOIN GROUP <groupId>\nINVITE MEMBER <@utilisateur>\nGROUP STATUS\nCONTRIBUTE <montant>\nWITHDRAW <montant>\n\n_Rotation des paiements_\nPAYOUT ORDER <@utilisateur1> <@utilisateur2> ...\nPAYOUT STATUS\nPAYOUT WAIT\nPAYOUT PROCEED\nPAYOUT SKIP <@utilisateur>\n\n_Assistance_\nHELP\nSUPPORT"

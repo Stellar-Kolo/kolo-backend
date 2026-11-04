@@ -48,6 +48,7 @@ const mockGetGroupStatus = jest.fn().mockResolvedValue([
     { role: 'CREATOR', groupId: 'g1', group: { id: 'g1', name: 'G1', contributionAmount: 10, contributionFrequency: 'MONTHLY', stellarContractId: 'group_pub_key', currentPayoutIndex: 0, totalCycles: 0, members: [] } },
 ]);
 const mockAddContribution = jest.fn().mockResolvedValue({ id: 'c1' });
+const mockAddWithdrawal = jest.fn().mockResolvedValue({ id: 'w1' });
 
 jest.mock('../utils/encryption.util', () => ({
     decrypt: (...args: any[]) => mockDecrypt(...args),
@@ -100,10 +101,11 @@ const mockGetTransactionHistory = jest.fn().mockResolvedValue({
 });
 const mockStellarService = { getTransactionHistory: mockGetTransactionHistory, checkBalance: mockCheckBalance, sendPayment: mockSendPayment, generateWallet: jest.fn(), fundTestnetAccount: jest.fn() };
 const mockUserService = { getOrCreateUser: mockGetOrCreateUser, resolveUser: mockResolveUser, getUserByPublicKey: jest.fn() };
-const mockGroupService = { createGroup: mockCreateGroup, joinGroup: mockJoinGroup, getGroupStatus: mockGetGroupStatus, addContribution: mockAddContribution };
+const mockGroupService = { createGroup: mockCreateGroup, joinGroup: mockJoinGroup, getGroupStatus: mockGetGroupStatus, addContribution: mockAddContribution, addWithdrawal: mockAddWithdrawal };
 
 const mockInvokeContribute = jest.fn().mockResolvedValue({ hash: 'soroban_tx_123', status: 'SUCCESS' });
-const mockSorobanService = { invokeContribute: mockInvokeContribute };
+const mockWithdrawSavings = jest.fn().mockResolvedValue({ hash: 'soroban_withdraw_tx_123', status: 'SUCCESS' });
+const mockSorobanService = { invokeContribute: mockInvokeContribute, withdrawSavings: mockWithdrawSavings };
 
 const mockSetPayoutOrder = jest.fn().mockResolvedValue(['u1', 'u2']);
 const mockGetEffectivePayoutOrder = jest.fn().mockResolvedValue(['u1', 'u2']);
@@ -609,9 +611,48 @@ describe('MessageProcessor', () => {
             expect(mockSendMessage).toHaveBeenCalledWith('12345', expect.stringContaining('withdraw.no_group'));
         });
 
-        it('should confirm withdrawal', async () => {
+        it('rejects withdrawal for a Rotational group — no on-chain mechanism for it', async () => {
+            // The default mockGetGroupStatus fixture has no groupType set,
+            // i.e. the Rotational default (see schema.prisma).
             await processor.processCommand('12345', 'WITHDRAW 100');
+            expect(mockSendMessage).toHaveBeenCalledWith('12345', expect.stringContaining('withdraw.not_goalbased'));
+            expect(mockWithdrawSavings).not.toHaveBeenCalled();
+        });
+
+        it('withdraws from a GoalBased group and records the DB withdrawal on confirmation', async () => {
+            mockGetGroupStatus.mockResolvedValueOnce([
+                { role: 'MEMBER', groupId: 'g1', group: { id: 'g1', name: 'G1', groupType: 'GoalBased', stellarContractId: 'group_pub_key' } },
+            ]);
+
+            await processor.processCommand('12345', 'WITHDRAW 100');
+
+            expect(mockWithdrawSavings).toHaveBeenCalledTimes(1);
+            expect(mockAddWithdrawal).toHaveBeenCalledWith('u1', 'g1', '100', 'soroban_withdraw_tx_123');
             expect(mockSendMessage).toHaveBeenCalledWith('12345', expect.stringContaining('withdraw.success'));
+        });
+
+        it('records a PENDING withdrawal and does not mark it successful when confirmation times out', async () => {
+            mockGetGroupStatus.mockResolvedValueOnce([
+                { role: 'MEMBER', groupId: 'g1', group: { id: 'g1', name: 'G1', groupType: 'GoalBased', stellarContractId: 'group_pub_key' } },
+            ]);
+            mockWithdrawSavings.mockResolvedValueOnce({ hash: 'slow_withdraw_tx', status: 'PENDING' });
+
+            await processor.processCommand('12345', 'WITHDRAW 100');
+
+            expect(mockAddWithdrawal).toHaveBeenCalledWith('u1', 'g1', '100', 'slow_withdraw_tx', 'PENDING');
+            expect(mockSendMessage).toHaveBeenCalledWith('12345', expect.stringContaining('withdraw.pending'));
+        });
+
+        it('reports an on-chain failure distinctly from a network error', async () => {
+            mockGetGroupStatus.mockResolvedValueOnce([
+                { role: 'MEMBER', groupId: 'g1', group: { id: 'g1', name: 'G1', groupType: 'GoalBased', stellarContractId: 'group_pub_key' } },
+            ]);
+            mockWithdrawSavings.mockRejectedValueOnce(new Error('Transaction failed on ledger: bad_hash'));
+
+            await processor.processCommand('12345', 'WITHDRAW 100');
+
+            expect(mockSendMessage).toHaveBeenCalledWith('12345', expect.stringContaining('withdraw.failed_onchain'));
+            expect(mockAddWithdrawal).not.toHaveBeenCalled();
         });
     });
 
