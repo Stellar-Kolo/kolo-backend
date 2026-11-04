@@ -28,6 +28,10 @@ jest.mock('@prisma/client', () => {
     return { PrismaClient: jest.fn(() => mPrismaClient) };
 });
 
+jest.mock('../middleware/prisma-encryption.middleware', () => ({
+    applyEncryptionMiddleware: jest.fn(),
+}));
+
 jest.mock('../services/stellar.service', () => {
     const actual = jest.requireActual('../services/stellar.service');
     const mStellarService = {
@@ -49,7 +53,10 @@ jest.mock('../services/whatsapp.service', () => {
 });
 
 jest.mock('../utils/encryption.util', () => ({
-    decrypt: jest.fn().mockReturnValue('S_MOCK_SECRET'),
+    // The real decrypt() always returns a Buffer (raw key material); a plain
+    // string here breaks the Buffer-only unregisterSecret()/.fill(0) cleanup
+    // in UserService's finally block, masking whatever error is under test.
+    decrypt: jest.fn().mockReturnValue(Buffer.from('S_MOCK_SECRET')),
 }));
 
 jest.mock('../services/locale.service', () => ({
@@ -81,11 +88,11 @@ describe('UserService', () => {
     describe('getOrCreateUser', () => {
         it('should return existing user if found', async () => {
             const mockUser = { id: '1', phoneNumber: '1234567890' };
-            prismaClientMock.user.findUnique.mockResolvedValueOnce(mockUser);
+            prismaClientMock.user.findFirst.mockResolvedValueOnce(mockUser);
 
             const result = await userService.getOrCreateUser('1234567890');
 
-            expect(prismaClientMock.user.findUnique).toHaveBeenCalledWith({
+            expect(prismaClientMock.user.findFirst).toHaveBeenCalledWith({
                 where: { phoneNumber: '1234567890' }
             });
             expect(prismaClientMock.user.create).not.toHaveBeenCalled();
@@ -153,7 +160,11 @@ describe('UserService', () => {
 
             await userService.getOrCreateUser('3333333333');
 
-            expect(stellarServiceMock.createTrustline).toHaveBeenCalledWith('S_MOCK_SECRET', 'USDC', 'G_USDC_ISSUER');
+            // The secret buffer is deliberately zeroed in place after use
+            // (unregisterSecret + secretBuffer.fill(0)), so by the time this
+            // assertion runs the captured reference's content is wiped —
+            // assert the type/other args, not byte content.
+            expect(stellarServiceMock.createTrustline).toHaveBeenCalledWith(expect.any(Buffer), 'USDC', 'G_USDC_ISSUER');
             expect(whatsappServiceMock.sendMessage).not.toHaveBeenCalled();
         });
 
@@ -221,12 +232,13 @@ describe('UserService', () => {
 
     describe('updateUserLanguage', () => {
         it('should update user language', async () => {
+            prismaClientMock.user.findFirst.mockResolvedValueOnce({ id: '1', phoneNumber: '1234567890' });
             prismaClientMock.user.update.mockResolvedValueOnce({ id: '1', phoneNumber: '1234567890', language: 'fr' });
 
             await userService.updateUserLanguage('1234567890', 'fr');
 
             expect(prismaClientMock.user.update).toHaveBeenCalledWith({
-                where: { phoneNumber: '1234567890' },
+                where: { id: '1' },
                 data: { language: 'fr' }
             });
         });
@@ -242,9 +254,9 @@ describe('UserService', () => {
         });
 
         it('should resolve by phone number if target does not start with @', async () => {
-            prismaClientMock.user.findUnique.mockResolvedValueOnce({ phoneNumber: '123' });
+            prismaClientMock.user.findFirst.mockResolvedValueOnce({ phoneNumber: '123' });
             await userService.resolveUser('123');
-            expect(prismaClientMock.user.findUnique).toHaveBeenCalledWith({
+            expect(prismaClientMock.user.findFirst).toHaveBeenCalledWith({
                 where: { phoneNumber: '123' }
             });
         });

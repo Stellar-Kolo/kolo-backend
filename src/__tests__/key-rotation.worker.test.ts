@@ -114,6 +114,6 @@ describe('key-rotation.worker', () => {
         
         // Decrypt with v2
         const decrypted = decrypt(newWallet.encryptedSecret, newWallet.iv, newWallet.authTag, 2);
-        expect(decrypted).toBe('secret-data-0');
+        expect(decrypted.toString('utf8')).toBe('secret-data-0');
     });
 });

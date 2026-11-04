@@ -20,6 +20,10 @@ jest.mock('@prisma/client', () => {
     };
 });
 
+jest.mock('../middleware/prisma-encryption.middleware', () => ({
+    applyEncryptionMiddleware: jest.fn(),
+}));
+
 jest.mock('../services/whatsapp.service');
 jest.mock('../services/payout.service');
 jest.mock('../queue/contribution-scheduler.queue');
