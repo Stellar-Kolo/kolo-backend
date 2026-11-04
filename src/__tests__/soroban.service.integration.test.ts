@@ -48,6 +48,8 @@ describe('SorobanService Integration', () => {
             usdcTokenAddress: config.USDC_TOKEN_ADDRESS,
             groupName: 'Test Group',
             contributionAmount: '100',
+            groupType: 'Rotational',
+            lockUntilTarget: false,
         });
 
         expect(initializeResult).toHaveProperty('txHash');

@@ -70,16 +70,16 @@ describe('GroupExitService', () => {
     let originalTreasurySecret: string;
 
     beforeAll(() => {
-        originalTreasurySecret = config.GROUP_TREASURY_SECRET;
+        originalTreasurySecret = config.DEPLOYER_SECRET_KEY;
     });
 
     afterAll(() => {
-        config.GROUP_TREASURY_SECRET = originalTreasurySecret;
+        config.DEPLOYER_SECRET_KEY = originalTreasurySecret;
     });
 
     beforeEach(() => {
         jest.clearAllMocks();
-        config.GROUP_TREASURY_SECRET = '';
+        config.DEPLOYER_SECRET_KEY = '';
 
         prisma.contribution.aggregate.mockResolvedValue({ _sum: { amount: 0 } });
         prisma.payout.aggregate.mockResolvedValue({ _sum: { amount: 0 } });
@@ -177,7 +177,7 @@ describe('GroupExitService', () => {
         });
 
         it('invokes the Soroban remove_member call when the group has a deployed contract', async () => {
-            config.GROUP_TREASURY_SECRET = 'SDUXAYQVG4GSKJI7I7CANSO4UZEAS3R6KGV5XUBRFAVZEWWL2QNTCMMU';
+            config.DEPLOYER_SECRET_KEY = 'SDUXAYQVG4GSKJI7I7CANSO4UZEAS3R6KGV5XUBRFAVZEWWL2QNTCMMU';
             prisma.savingsGroup.findUnique.mockResolvedValueOnce(makeGroup({ stellarContractId: 'CCONTRACT123' }));
 
             await service.leaveGroup('u2', 'g1');
@@ -190,7 +190,7 @@ describe('GroupExitService', () => {
         });
 
         it('does not fail the exit when the Soroban removal call throws', async () => {
-            config.GROUP_TREASURY_SECRET = 'SDUXAYQVG4GSKJI7I7CANSO4UZEAS3R6KGV5XUBRFAVZEWWL2QNTCMMU';
+            config.DEPLOYER_SECRET_KEY = 'SDUXAYQVG4GSKJI7I7CANSO4UZEAS3R6KGV5XUBRFAVZEWWL2QNTCMMU';
             mockSorobanRemoveMember.mockRejectedValueOnce(new Error('RPC unavailable'));
             prisma.savingsGroup.findUnique.mockResolvedValueOnce(makeGroup({ stellarContractId: 'CCONTRACT123' }));
 

@@ -265,6 +265,184 @@ describe('SorobanService.removeMember()', () => {
     });
 });
 
+describe('SorobanService.payout()', () => {
+    let service: SorobanService;
+    let mockServer: any;
+    let adminKeypair: StellarSdk.Keypair;
+    let recipientPublicKey: string;
+    const contractId = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+
+    beforeEach(() => {
+        adminKeypair = StellarSdk.Keypair.random();
+        recipientPublicKey = StellarSdk.Keypair.random().publicKey();
+        service = new SorobanService('https://soroban-testnet.stellar.org');
+        mockServer = {
+            simulateTransaction: jest.fn().mockResolvedValue(makeSimSuccess()),
+            sendTransaction: jest.fn().mockResolvedValue({ status: 'SUCCESS', hash: 'payout_hash_1' }),
+            getTransaction: jest.fn(),
+            getAccount: jest.fn().mockResolvedValue(new StellarSdk.Account(adminKeypair.publicKey(), '50')),
+        };
+        service.server = mockServer;
+    });
+
+    it('builds and submits a payout(expected_recipient) invocation with no amount argument, signed by the admin keypair', async () => {
+        const result = await service.payout(adminKeypair, contractId, recipientPublicKey, mockServer);
+
+        expect(result).toEqual({ hash: 'payout_hash_1', status: 'SUCCESS' });
+        expect(mockServer.getAccount).toHaveBeenCalledWith(adminKeypair.publicKey());
+
+        const invokeOp = (service as any).server.simulateTransaction.mock.calls[0][0].operations[0];
+        expect(invokeOp.func.value().functionName().toString()).toBe('payout');
+        expect(invokeOp.func.value().args()).toHaveLength(1);
+    });
+
+    it('throws when the on-chain transaction FAILED (e.g. insufficient pool funds)', async () => {
+        mockServer.sendTransaction.mockResolvedValue({ status: 'PENDING', hash: 'payout_fail_hash' });
+        mockServer.getTransaction.mockResolvedValue({ status: 'FAILED' });
+
+        await expect(
+            service.payout(adminKeypair, contractId, recipientPublicKey, mockServer),
+        ).rejects.toThrow('Transaction failed on ledger: payout_fail_hash');
+    });
+});
+
+describe('SorobanService.withdrawSavings()', () => {
+    let service: SorobanService;
+    let mockServer: any;
+    let memberKeypair: StellarSdk.Keypair;
+    const contractId = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+
+    beforeEach(() => {
+        memberKeypair = StellarSdk.Keypair.random();
+        service = new SorobanService('https://soroban-testnet.stellar.org');
+        mockServer = {
+            simulateTransaction: jest.fn().mockResolvedValue(makeSimSuccess()),
+            sendTransaction: jest.fn().mockResolvedValue({ status: 'SUCCESS', hash: 'withdraw_hash_1' }),
+            getTransaction: jest.fn(),
+            getAccount: jest.fn().mockResolvedValue(new StellarSdk.Account(memberKeypair.publicKey(), '50')),
+        };
+        service.server = mockServer;
+    });
+
+    it('builds and submits a withdraw_savings(member, amount) invocation signed by the member keypair', async () => {
+        const result = await service.withdrawSavings(memberKeypair, contractId, memberKeypair.publicKey(), 150_000_000n, mockServer);
+
+        expect(result).toEqual({ hash: 'withdraw_hash_1', status: 'SUCCESS' });
+        expect(mockServer.getAccount).toHaveBeenCalledWith(memberKeypair.publicKey());
+
+        const invokeOp = (service as any).server.simulateTransaction.mock.calls[0][0].operations[0];
+        expect(invokeOp.func.value().functionName().toString()).toBe('withdraw_savings');
+        expect(invokeOp.func.value().args()).toHaveLength(2);
+    });
+});
+
+describe('SorobanService.resetCycle() / resetRotation()', () => {
+    let service: SorobanService;
+    let mockServer: any;
+    let adminKeypair: StellarSdk.Keypair;
+    const contractId = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+
+    beforeEach(() => {
+        adminKeypair = StellarSdk.Keypair.random();
+        service = new SorobanService('https://soroban-testnet.stellar.org');
+        mockServer = {
+            simulateTransaction: jest.fn().mockResolvedValue(makeSimSuccess()),
+            sendTransaction: jest.fn().mockResolvedValue({ status: 'SUCCESS', hash: 'reset_hash_1' }),
+            getTransaction: jest.fn(),
+            getAccount: jest.fn().mockResolvedValue(new StellarSdk.Account(adminKeypair.publicKey(), '50')),
+        };
+        service.server = mockServer;
+    });
+
+    it('invokes reset_cycle() with no arguments', async () => {
+        await service.resetCycle(adminKeypair, contractId, mockServer);
+
+        const invokeOp = (service as any).server.simulateTransaction.mock.calls[0][0].operations[0];
+        expect(invokeOp.func.value().functionName().toString()).toBe('reset_cycle');
+        expect(invokeOp.func.value().args()).toHaveLength(0);
+    });
+
+    it('invokes reset_rotation() with no arguments', async () => {
+        await service.resetRotation(adminKeypair, contractId, mockServer);
+
+        const invokeOp = (service as any).server.simulateTransaction.mock.calls[0][0].operations[0];
+        expect(invokeOp.func.value().functionName().toString()).toBe('reset_rotation');
+        expect(invokeOp.func.value().args()).toHaveLength(0);
+    });
+});
+
+describe('SorobanService.initializeContract()', () => {
+    let service: SorobanService;
+    let mockServer: any;
+    let deployerKeypair: StellarSdk.Keypair;
+    const contractId = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM';
+
+    beforeEach(() => {
+        deployerKeypair = StellarSdk.Keypair.random();
+        service = new SorobanService('https://soroban-testnet.stellar.org');
+        mockServer = {
+            simulateTransaction: jest.fn().mockResolvedValue(makeSimSuccess()),
+            sendTransaction: jest.fn().mockResolvedValue({ status: 'SUCCESS', hash: 'init_hash_1' }),
+            getTransaction: jest.fn(),
+            getAccount: jest.fn().mockResolvedValue(new StellarSdk.Account(deployerKeypair.publicKey(), '50')),
+        };
+        service.server = mockServer;
+    });
+
+    it('passes all 8 contract parameters, encoding GroupType as a one-element Symbol vec and absent Options as void', async () => {
+        await service.initializeContract(deployerKeypair, contractId, {
+            admin: deployerKeypair.publicKey(),
+            usdcTokenAddress: StellarSdk.Keypair.random().publicKey(),
+            groupName: 'Test Group',
+            contributionAmount: '100',
+            groupType: 'Rotational',
+            lockUntilTarget: false,
+        }, mockServer);
+
+        const invokeOp = (service as any).server.simulateTransaction.mock.calls[0][0].operations[0];
+        const fn = invokeOp.func.value();
+        expect(fn.functionName().toString()).toBe('initialize');
+        const args = fn.args();
+        expect(args).toHaveLength(8);
+
+        // group_type: Vec([Symbol("Rotational")]) — a union case with no data
+        const groupTypeArg = args[4];
+        expect(groupTypeArg.switch().name).toBe('scvVec');
+        const vecVal = groupTypeArg.vec()!;
+        expect(vecVal).toHaveLength(1);
+        expect(vecVal[0].sym().toString()).toBe('Rotational');
+
+        // target_amount: Option::None -> ScVal::Void
+        expect(args[5].switch().name).toBe('scvVoid');
+        // lock_until_target: bool
+        expect(args[6].switch().name).toBe('scvBool');
+        // expected_cycle_days: Option::None -> ScVal::Void
+        expect(args[7].switch().name).toBe('scvVoid');
+    });
+
+    it('encodes a provided targetAmount/expectedCycleDays as their own ScVal, not void', async () => {
+        await service.initializeContract(deployerKeypair, contractId, {
+            admin: deployerKeypair.publicKey(),
+            usdcTokenAddress: StellarSdk.Keypair.random().publicKey(),
+            groupName: 'Goal Group',
+            contributionAmount: '100',
+            groupType: 'GoalBased',
+            targetAmount: '5000',
+            lockUntilTarget: true,
+            expectedCycleDays: 30,
+        }, mockServer);
+
+        const invokeOp = (service as any).server.simulateTransaction.mock.calls[0][0].operations[0];
+        const args = invokeOp.func.value().args();
+
+        const groupTypeArg = args[4];
+        expect(groupTypeArg.vec()![0].sym().toString()).toBe('GoalBased');
+        expect(args[5].switch().name).toBe('scvI128');
+        expect(args[7].switch().name).toBe('scvU32');
+        expect(args[7].u32()).toBe(30);
+    });
+});
+
 // ── queryContribution ─────────────────────────────────────────────────────────
 
 describe('SorobanService.queryContribution()', () => {

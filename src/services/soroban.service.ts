@@ -18,8 +18,28 @@ export interface DeployGroupContractParams {
     groupId: string;
     name: string;
     contributionAmount: string | number | bigint;
-    adminPublicKey?: string;
+    /** Mirrors the contract's GroupType enum. Defaults to 'Rotational'. */
+    groupType?: 'Rotational' | 'GoalBased';
+    targetAmount?: string | number | bigint | null;
+    lockUntilTarget?: boolean;
+    expectedCycleDays?: number | null;
     wasmPath?: string;
+}
+
+/**
+ * Encodes a unit variant of the contract's GroupType union (no associated
+ * data) the way the Soroban Rust SDK represents a plain `#[contracttype]`
+ * union case: a one-element Vec holding the case name as a Symbol. Confirmed
+ * against the built contract's own spec (`stellar contract info interface`),
+ * which reports GroupType as `udt_union_v0` with `void_v0` cases.
+ */
+function groupTypeToScVal(groupType: 'Rotational' | 'GoalBased'): StellarSdk.xdr.ScVal {
+    return StellarSdk.xdr.ScVal.scvVec([StellarSdk.xdr.ScVal.scvSymbol(groupType)]);
+}
+
+/** Option<T>::None is ScVal::Void; Option<T>::Some(x) is just x's own ScVal. */
+function optionToScVal<T>(value: T | null | undefined, toScVal: (v: T) => StellarSdk.xdr.ScVal): StellarSdk.xdr.ScVal {
+    return value === null || value === undefined ? StellarSdk.xdr.ScVal.scvVoid() : toScVal(value);
 }
 
 export interface DeploymentResult {
@@ -271,6 +291,11 @@ export class SorobanService {
 
     /**
      * Invokes the initialize() method on the deployed contract with group parameters.
+     *
+     * Must pass all 8 of the contract's initialize() parameters in order — an
+     * earlier version of this method only passed the first 4, which Soroban
+     * rejects outright (argument count/type must match the function's spec
+     * exactly), so no group's contract was ever actually initializable.
      */
     public async initializeContract(
         deployerKeypair: StellarSdk.Keypair,
@@ -280,6 +305,10 @@ export class SorobanService {
             usdcTokenAddress: string;
             groupName: string;
             contributionAmount: string | number | bigint;
+            groupType: 'Rotational' | 'GoalBased';
+            targetAmount?: string | number | bigint | null;
+            lockUntilTarget: boolean;
+            expectedCycleDays?: number | null;
         },
         server?: StellarSdk.rpc.Server
     ): Promise<{ txHash: string }> {
@@ -295,6 +324,13 @@ export class SorobanService {
             new StellarSdk.Address(params.usdcTokenAddress).toScVal(),
             StellarSdk.nativeToScVal(params.groupName),
             StellarSdk.nativeToScVal(amountBigInt, { type: 'i128' }),
+            groupTypeToScVal(params.groupType),
+            optionToScVal(
+                params.targetAmount,
+                (v) => StellarSdk.nativeToScVal(typeof v === 'bigint' ? v : BigInt(Math.floor(Number(v))), { type: 'i128' }),
+            ),
+            StellarSdk.nativeToScVal(params.lockUntilTarget, { type: 'bool' }),
+            optionToScVal(params.expectedCycleDays, (v) => StellarSdk.nativeToScVal(v, { type: 'u32' })),
         ];
 
         const invokeOp = StellarSdk.Operation.invokeContractFunction({
@@ -335,7 +371,14 @@ export class SorobanService {
 try {
             const deployerSeed = StellarSdk.StrKey.decodeEd25519SecretSeed(config.DEPLOYER_SECRET_KEY);
             const deployerKeypair = StellarSdk.Keypair.fromRawEd25519Seed(deployerSeed);
-            const admin = params.adminPublicKey || deployerKeypair.publicKey();
+            // The on-chain admin must always be this same deployer keypair —
+            // it's the identity the backend later signs payout() and
+            // remove_member() with (see PayoutService/GroupExitService). An
+            // earlier version let the group creator's own wallet become the
+            // on-chain admin, which the backend doesn't hold a signing key
+            // for in that flow, so every later admin-authorized call would
+            // fail its require_auth_for_args check.
+            const admin = deployerKeypair.publicKey();
             const usdcTokenAddress = config.USDC_TOKEN_ADDRESS || 'CCW67TSBXSHOMEVDBLAEXGPSDMT2OVL4TJBB25KVEA2MOWFK76OO5SS7';
 
             try {
@@ -354,6 +397,10 @@ try {
                     usdcTokenAddress,
                     groupName: params.name,
                     contributionAmount: params.contributionAmount,
+                    groupType: params.groupType ?? 'Rotational',
+                    targetAmount: params.targetAmount ?? null,
+                    lockUntilTarget: params.lockUntilTarget ?? false,
+                    expectedCycleDays: params.expectedCycleDays ?? null,
                 });
 
                 const latency = Date.now() - startTime;
@@ -477,6 +524,160 @@ try {
         tx = await this.simulateAndAssembleTransaction(tx, srv);
 
         return await this.submitTransaction(tx, adminKeypair, srv);
+    }
+
+    /**
+     * Invokes the Soroban contract's `payout(expected_recipient)` function —
+     * pays the next member in rotation order. The contract computes the pool
+     * size itself (contribution_amount × the cycle's frozen member count) and
+     * transfers it from its own balance; there is no amount parameter to pass.
+     *
+     * Signed by the admin keypair (the same identity passed as `admin` to
+     * initialize() — see deployGroupContract()), since the contract checks
+     * `admin.require_auth_for_args` against the recipient address.
+     *
+     * @param adminKeypair       Keypair matching the contract's on-chain admin.
+     * @param contractId         Soroban contract address (C... strkey).
+     * @param recipientPublicKey Stellar G... public key of the expected next recipient.
+     * @param server             Optional RPC server override.
+     * @returns `{ hash, status }` from `submitTransaction()`.
+     */
+    public async payout(
+        adminKeypair: StellarSdk.Keypair,
+        contractId: string,
+        recipientPublicKey: string,
+        server?: StellarSdk.rpc.Server
+    ): Promise<{ hash: string; status: 'SUCCESS' | 'PENDING' }> {
+        const srv = server || this.server;
+        const account = await srv.getAccount(adminKeypair.publicKey());
+
+        const args = [
+            new StellarSdk.Address(recipientPublicKey).toScVal(),
+        ];
+
+        const invokeOp = StellarSdk.Operation.invokeContractFunction({
+            contract: contractId,
+            function: 'payout',
+            args,
+        });
+
+        let tx = new StellarSdk.TransactionBuilder(account, {
+            fee: '1000',
+            networkPassphrase: this.getNetworkPassphrase(),
+        })
+            .addOperation(invokeOp)
+            .setTimeout(30)
+            .build();
+
+        tx = await this.simulateAndAssembleTransaction(tx, srv);
+
+        return await this.submitTransaction(tx, adminKeypair, srv);
+    }
+
+    /**
+     * Invokes the Soroban contract's `withdraw_savings(member, amount)`
+     * function — GoalBased groups only; the contract panics for Rotational
+     * groups. Signed by the member themselves (member.require_auth()), since
+     * this is the member reclaiming their own recorded contributions.
+     *
+     * @param memberKeypair    Keypair of the withdrawing member (signs the tx).
+     * @param contractId       Soroban contract address (C... strkey).
+     * @param memberPublicKey  Stellar G... public key of the withdrawing member.
+     * @param amountStroops    Withdrawal amount in the token's smallest unit.
+     * @param server           Optional RPC server override.
+     * @returns `{ hash, status }` from `submitTransaction()`.
+     */
+    public async withdrawSavings(
+        memberKeypair: StellarSdk.Keypair,
+        contractId: string,
+        memberPublicKey: string,
+        amountStroops: bigint,
+        server?: StellarSdk.rpc.Server
+    ): Promise<{ hash: string; status: 'SUCCESS' | 'PENDING' }> {
+        const srv = server || this.server;
+        const account = await srv.getAccount(memberKeypair.publicKey());
+
+        const args = [
+            new StellarSdk.Address(memberPublicKey).toScVal(),
+            StellarSdk.nativeToScVal(amountStroops, { type: 'i128' }),
+        ];
+
+        const invokeOp = StellarSdk.Operation.invokeContractFunction({
+            contract: contractId,
+            function: 'withdraw_savings',
+            args,
+        });
+
+        let tx = new StellarSdk.TransactionBuilder(account, {
+            fee: '1000',
+            networkPassphrase: this.getNetworkPassphrase(),
+        })
+            .addOperation(invokeOp)
+            .setTimeout(30)
+            .build();
+
+        tx = await this.simulateAndAssembleTransaction(tx, srv);
+
+        return await this.submitTransaction(tx, memberKeypair, srv);
+    }
+
+    /** Shared builder for the contract's no-argument, admin-only functions. */
+    private async invokeAdminNoArgFunction(
+        adminKeypair: StellarSdk.Keypair,
+        contractId: string,
+        functionName: string,
+        server?: StellarSdk.rpc.Server
+    ): Promise<{ hash: string; status: 'SUCCESS' | 'PENDING' }> {
+        const srv = server || this.server;
+        const account = await srv.getAccount(adminKeypair.publicKey());
+
+        const invokeOp = StellarSdk.Operation.invokeContractFunction({
+            contract: contractId,
+            function: functionName,
+            args: [],
+        });
+
+        let tx = new StellarSdk.TransactionBuilder(account, {
+            fee: '1000',
+            networkPassphrase: this.getNetworkPassphrase(),
+        })
+            .addOperation(invokeOp)
+            .setTimeout(30)
+            .build();
+
+        tx = await this.simulateAndAssembleTransaction(tx, srv);
+
+        return await this.submitTransaction(tx, adminKeypair, srv);
+    }
+
+    /**
+     * Invokes the contract's `reset_cycle()` — advances CurrentCycleId so
+     * members can contribute again. Per the contract's own doc comment, this
+     * must run after *every* payout() within a rotation, not just the last
+     * one: each contract "cycle" is one contribution round feeding one
+     * payout, which is a finer grain than the backend's own "cycle" (a full
+     * rotation through every member — see PayoutService.completeCycle).
+     */
+    public async resetCycle(
+        adminKeypair: StellarSdk.Keypair,
+        contractId: string,
+        server?: StellarSdk.rpc.Server
+    ): Promise<{ hash: string; status: 'SUCCESS' | 'PENDING' }> {
+        return this.invokeAdminNoArgFunction(adminKeypair, contractId, 'reset_cycle', server);
+    }
+
+    /**
+     * Invokes the contract's `reset_rotation()` — zeroes NextPayoutIndex so
+     * the rotation starts over from the first member. Call only once a full
+     * rotation has completed (every member has received a payout), not
+     * after each individual payout.
+     */
+    public async resetRotation(
+        adminKeypair: StellarSdk.Keypair,
+        contractId: string,
+        server?: StellarSdk.rpc.Server
+    ): Promise<{ hash: string; status: 'SUCCESS' | 'PENDING' }> {
+        return this.invokeAdminNoArgFunction(adminKeypair, contractId, 'reset_rotation', server);
     }
 
     /**

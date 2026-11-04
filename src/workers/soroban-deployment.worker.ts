@@ -22,7 +22,6 @@ export function startSorobanDeploymentWorker(): void {
 
             const group = await prisma.savingsGroup.findUnique({
                 where: { id: groupId },
-                include: { members: { include: { user: true } } },
             });
 
             if (!group) {
@@ -35,25 +34,14 @@ export function startSorobanDeploymentWorker(): void {
                 data: { deploymentStatus: 'DEPLOYING', deploymentError: null },
             });
 
-            // Find group creator's public key if available
-            const creatorMember = group.members.find((m) => m.role === 'CREATOR') || group.members[0];
-            let adminPublicKey: string | undefined;
-
-            if (creatorMember?.user?.stellarWallet) {
-                try {
-                    const walletObj = JSON.parse(creatorMember.user.stellarWallet);
-                    adminPublicKey = walletObj.publicKey;
-                } catch (e) {
-                    console.warn(`Could not parse creator stellarWallet for user ${creatorMember.userId}`);
-                }
-            }
-
             try {
                 const result = await sorobanService.deployGroupContract({
                     groupId: group.id,
                     name: group.name,
                     contributionAmount: group.contributionAmount.toString(),
-                    adminPublicKey,
+                    groupType: (group as any).groupType ?? 'Rotational',
+                    targetAmount: (group as any).targetAmount?.toString() ?? null,
+                    lockUntilTarget: (group as any).lockUntilTarget ?? false,
                 });
 
                 // Update group with contract ID and DEPLOYED status

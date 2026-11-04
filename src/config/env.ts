@@ -33,9 +33,13 @@ export const config = {
     USDC_ISSUER_PUBLIC_KEY: process.env.USDC_ISSUER_PUBLIC_KEY || '', // SDF testnet issuer or Circle/centre.io mainnet issuer, depending on STELLAR_NETWORK
     SOROBAN_RPC_URL: process.env.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org',
     CONTRACT_WASM_PATH: process.env.CONTRACT_WASM_PATH || 'contracts/savings_group.wasm',
+    // Also the on-chain admin for every deployed group's contract (see
+    // SorobanService.deployGroupContract) — PayoutService and
+    // GroupExitService sign payout()/remove_member()/reset_cycle() calls
+    // with this same identity, since the contract's admin.require_auth
+    // checks must match whoever initialize() registered as admin.
     DEPLOYER_SECRET_KEY: process.env.DEPLOYER_SECRET_KEY || '',
     USDC_TOKEN_ADDRESS: process.env.USDC_TOKEN_ADDRESS || 'CCW67TSBXSHOMEVDBLAEXGPSDMT2OVL4TJBB25KVEA2MOWFK76OO5SS7',
-    GROUP_TREASURY_SECRET: process.env.GROUP_TREASURY_SECRET || '',
     MAX_PAYOUT_DEADLINE_EXTENSIONS: parseInt(process.env.MAX_PAYOUT_DEADLINE_EXTENSIONS || '2', 10),
     SEP10_SERVER_SECRET: process.env.SEP10_SERVER_SECRET,
     SEP10_HOME_DOMAIN: process.env.SEP10_HOME_DOMAIN || 'localhost',

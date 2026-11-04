@@ -141,10 +141,10 @@ export class GroupExitService {
             refundTxHash = refund?.hash ?? null;
         }
 
-        if (group.stellarContractId && member.user?.stellarWallet && config.GROUP_TREASURY_SECRET) {
+        if (group.stellarContractId && member.user?.stellarWallet && config.DEPLOYER_SECRET_KEY) {
             try {
                 const memberPublicKey = JSON.parse(member.user.stellarWallet).publicKey;
-                const adminSeed = StellarSdk.StrKey.decodeEd25519SecretSeed(config.GROUP_TREASURY_SECRET);
+                const adminSeed = StellarSdk.StrKey.decodeEd25519SecretSeed(config.DEPLOYER_SECRET_KEY);
                 const adminKeypair = StellarSdk.Keypair.fromRawEd25519Seed(adminSeed);
                 try {
                     await this.sorobanService.removeMember(adminKeypair, group.stellarContractId, memberPublicKey);
