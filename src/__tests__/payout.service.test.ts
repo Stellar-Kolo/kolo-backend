@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import * as StellarSdk from '@stellar/stellar-sdk';
 import {
     PayoutService,
     PayoutOrderLockedError,
@@ -27,14 +28,42 @@ jest.mock('@prisma/client', () => {
         },
         $transaction: jest.fn((ops: any[]) => Promise.resolve(ops)),
     };
-    return { PrismaClient: jest.fn(() => mPrismaClient) };
+    class MockDecimal {
+        private val: number;
+        constructor(val: number | string) {
+            this.val = Number(val);
+        }
+        times(n: number) {
+            return new MockDecimal(this.val * n);
+        }
+        toString() {
+            return String(this.val);
+        }
+    }
+    return { PrismaClient: jest.fn(() => mPrismaClient), Prisma: { Decimal: MockDecimal } };
 });
 
 jest.mock('../queue/contribution-scheduler.queue', () => ({
     enqueueCycleEnd: jest.fn().mockResolvedValue(null),
 }));
 
+// refundMember() decrypts the exiting member's own wallet secret to sign a
+// member-authorized withdraw_savings() call. The real decrypt() always
+// returns a Buffer — here, a genuine 32-byte ed25519 seed so the real
+// StellarSdk.Keypair.fromRawEd25519Seed() call inside PayoutService doesn't
+// reject it for being the wrong length.
+const memberTestKeypair = StellarSdk.Keypair.random();
+const memberTestSeed = StellarSdk.StrKey.decodeEd25519SecretSeed(memberTestKeypair.secret());
+// refundMember() zeroes the decrypted buffer after use (secret hygiene), so
+// each call must get its own fresh copy — reusing one shared buffer across
+// tests would let an earlier test's cleanup zero out a later test's secret.
+jest.mock('../utils/encryption.util', () => ({
+    decrypt: jest.fn(() => Buffer.from(memberTestSeed)),
+}));
+
 const { enqueueCycleEnd } = require('../queue/contribution-scheduler.queue');
+
+const CONTRACT_ID = 'CCONTRACTIDTESTTESTTESTTESTTESTTESTTESTTESTTESTTESTTEST';
 
 function makeMember(userId: string, role: string, overrides: any = {}) {
     return {
@@ -58,15 +87,19 @@ describe('PayoutService', () => {
     let mockSendMessage: jest.Mock;
     let mockSorobanPayout: jest.Mock;
     let mockSorobanResetCycle: jest.Mock;
-    let originalTreasurySecret: string;
+    let mockSorobanResetRotation: jest.Mock;
+    let mockSorobanWithdrawSavings: jest.Mock;
+    let originalAdminSecret: string;
+    let adminTestKeypair: StellarSdk.Keypair;
 
     beforeAll(() => {
-        originalTreasurySecret = config.GROUP_TREASURY_SECRET;
-        config.GROUP_TREASURY_SECRET = 'TEST_TREASURY_SECRET';
+        adminTestKeypair = StellarSdk.Keypair.random();
+        originalAdminSecret = config.DEPLOYER_SECRET_KEY;
+        config.DEPLOYER_SECRET_KEY = adminTestKeypair.secret();
     });
 
     afterAll(() => {
-        config.GROUP_TREASURY_SECRET = originalTreasurySecret;
+        config.DEPLOYER_SECRET_KEY = originalAdminSecret;
     });
 
     beforeEach(() => {
@@ -87,10 +120,17 @@ describe('PayoutService', () => {
         mockSendMessage = jest.fn().mockResolvedValue(true);
         mockSorobanPayout = jest.fn().mockResolvedValue({ hash: 'tx_hash_1' });
         mockSorobanResetCycle = jest.fn().mockResolvedValue(undefined);
+        mockSorobanResetRotation = jest.fn().mockResolvedValue(undefined);
+        mockSorobanWithdrawSavings = jest.fn().mockResolvedValue({ hash: 'withdraw_tx_hash' });
 
         payoutService = new PayoutService(
             { sendMessage: mockSendMessage } as any,
-            { payout: mockSorobanPayout, resetCycle: mockSorobanResetCycle } as any,
+            {
+                payout: mockSorobanPayout,
+                resetCycle: mockSorobanResetCycle,
+                resetRotation: mockSorobanResetRotation,
+                withdrawSavings: mockSorobanWithdrawSavings,
+            } as any,
         );
     });
 
@@ -196,6 +236,7 @@ describe('PayoutService', () => {
                 contributionAmount: 10,
                 currentPayoutIndex: 1,
                 totalCycles: 0,
+                stellarContractId: CONTRACT_ID,
                 payoutOrder: ['u1', 'u2', 'u3'],
                 members: [makeMember('u1', 'CREATOR'), makeMember('u2', 'MEMBER'), makeMember('u3', 'MEMBER')],
             };
@@ -205,9 +246,11 @@ describe('PayoutService', () => {
 
             await payoutService.executePayout('g1');
 
-            expect(mockSorobanPayout).toHaveBeenCalledWith('TEST_TREASURY_SECRET', 'PUB_u2', '30');
+            // payout() takes no amount — the contract computes its own pool
+            // size (contribution_amount × frozen member count) internally.
+            expect(mockSorobanPayout).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID, 'PUB_u2');
             expect(prisma.payout.create).toHaveBeenCalledWith({
-                data: expect.objectContaining({ recipientId: 'u2', cycleNumber: 1 }),
+                data: expect.objectContaining({ recipientId: 'u2', cycleNumber: 1, amount: '30' }),
             });
             expect(prisma.savingsGroup.update).toHaveBeenCalledWith({
                 where: { id: 'g1' },
@@ -222,6 +265,7 @@ describe('PayoutService', () => {
                 contributionAmount: 10,
                 currentPayoutIndex: 0,
                 totalCycles: 0,
+                stellarContractId: CONTRACT_ID,
                 payoutOrder: ['u1', 'u2'],
                 members: [makeMember('u1', 'CREATOR'), makeMember('u2', 'MEMBER')],
             };
@@ -235,16 +279,79 @@ describe('PayoutService', () => {
             expect(mockSorobanPayout).not.toHaveBeenCalled();
             expect(prisma.payout.create).not.toHaveBeenCalled();
         });
+
+        it('throws when the group has no deployed contract', async () => {
+            const group = {
+                id: 'g1',
+                contributionAmount: 10,
+                currentPayoutIndex: 0,
+                totalCycles: 0,
+                stellarContractId: null,
+                payoutOrder: ['u1', 'u2'],
+                members: [makeMember('u1', 'CREATOR'), makeMember('u2', 'MEMBER')],
+            };
+            prisma.savingsGroup.findUnique.mockResolvedValueOnce(group);
+
+            await expect(payoutService.executePayout('g1')).rejects.toThrow('has no deployed contract');
+            expect(mockSorobanPayout).not.toHaveBeenCalled();
+        });
+
+        it('throws when no admin signer is configured', async () => {
+            const group = {
+                id: 'g1',
+                contributionAmount: 10,
+                currentPayoutIndex: 0,
+                totalCycles: 0,
+                stellarContractId: CONTRACT_ID,
+                payoutOrder: ['u1', 'u2'],
+                members: [makeMember('u1', 'CREATOR'), makeMember('u2', 'MEMBER')],
+            };
+            prisma.savingsGroup.findUnique.mockResolvedValueOnce(group);
+            prisma.payout.findFirst.mockResolvedValueOnce(null);
+            const original = config.DEPLOYER_SECRET_KEY;
+            config.DEPLOYER_SECRET_KEY = '';
+
+            await expect(payoutService.executePayout('g1')).rejects.toThrow('No admin signer configured');
+
+            config.DEPLOYER_SECRET_KEY = original;
+        });
     });
 
-    describe('executePayout — cycle completion', () => {
-        it('triggers a cycle reset once the last member in rotation is paid', async () => {
+    describe('executePayout — per-payout and full-rotation contract resets', () => {
+        it('advances the contract cycle after every payout, even mid-rotation', async () => {
+            const group = {
+                id: 'g1',
+                name: 'Ajo Circle',
+                contributionAmount: 10,
+                currentPayoutIndex: 0,
+                totalCycles: 0,
+                stellarContractId: CONTRACT_ID,
+                payoutOrder: ['u1', 'u2', 'u3'],
+                members: [makeMember('u1', 'CREATOR'), makeMember('u2', 'MEMBER'), makeMember('u3', 'MEMBER')],
+            };
+            prisma.savingsGroup.findUnique.mockResolvedValueOnce(group);
+            prisma.payout.findFirst.mockResolvedValueOnce(null);
+            prisma.payout.create.mockResolvedValueOnce({ id: 'payout-1', recipientId: 'u1' });
+
+            await payoutService.executePayout('g1');
+
+            // reset_cycle() must run after every payout — the contract's own
+            // "cycle" is one contribution round per payout, finer-grained
+            // than the backend's full-rotation "cycle" — so the next round of
+            // contribute() calls isn't rejected as a repeat contribution.
+            expect(mockSorobanResetCycle).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID);
+            // The rotation hasn't finished yet, so NextPayoutIndex must not reset.
+            expect(mockSorobanResetRotation).not.toHaveBeenCalled();
+        });
+
+        it('also resets the rotation once the last member in rotation is paid', async () => {
             const group = {
                 id: 'g1',
                 name: 'Ajo Circle',
                 contributionAmount: 10,
                 currentPayoutIndex: 1,
                 totalCycles: 0,
+                stellarContractId: CONTRACT_ID,
                 payoutOrder: ['u1', 'u2'],
                 members: [makeMember('u1', 'CREATOR'), makeMember('u2', 'MEMBER')],
             };
@@ -257,7 +364,8 @@ describe('PayoutService', () => {
 
             await payoutService.executePayout('g1');
 
-            expect(mockSorobanResetCycle).toHaveBeenCalledWith('g1');
+            expect(mockSorobanResetCycle).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID);
+            expect(mockSorobanResetRotation).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID);
             expect(prisma.savingsGroup.update).toHaveBeenCalledWith({
                 where: { id: 'g1' },
                 data: {
@@ -272,35 +380,17 @@ describe('PayoutService', () => {
                 expect.stringContaining('Cycle 1 complete'),
             );
         });
-
-        it('does not trigger a reset when members remain in the rotation', async () => {
-            const group = {
-                id: 'g1',
-                name: 'Ajo Circle',
-                contributionAmount: 10,
-                currentPayoutIndex: 0,
-                totalCycles: 0,
-                payoutOrder: ['u1', 'u2', 'u3'],
-                members: [makeMember('u1', 'CREATOR'), makeMember('u2', 'MEMBER'), makeMember('u3', 'MEMBER')],
-            };
-            prisma.savingsGroup.findUnique.mockResolvedValueOnce(group);
-            prisma.payout.findFirst.mockResolvedValueOnce(null);
-            prisma.payout.create.mockResolvedValueOnce({ id: 'payout-1', recipientId: 'u1' });
-
-            await payoutService.executePayout('g1');
-
-            expect(mockSorobanResetCycle).not.toHaveBeenCalled();
-        });
     });
 
     describe('proceedWithPartialPool — partial pool calculations', () => {
-        it('pays out only the amount actually contributed this cycle', async () => {
+        it('records the partial amount in the DB, but still invokes payout() with no amount', async () => {
             const group = {
                 id: 'g1',
                 name: 'Ajo Circle',
                 contributionAmount: 10,
                 currentPayoutIndex: 0,
                 totalCycles: 0,
+                stellarContractId: CONTRACT_ID,
                 currentCycleStart: new Date(2026, 0, 1),
                 currentCycleEnd: new Date(2026, 0, 8),
                 payoutOrder: ['u1', 'u2', 'u3'],
@@ -317,8 +407,16 @@ describe('PayoutService', () => {
 
             await payoutService.proceedWithPartialPool('g1');
 
-            // 2 contributors * 10 XLM = 20, not the full 3 * 10 = 30 pool
-            expect(mockSorobanPayout).toHaveBeenCalledWith('TEST_TREASURY_SECRET', 'PUB_u1', '20');
+            // The contract has no partial-payout mechanism: it always
+            // transfers its own computed full pool from its own balance, so
+            // the "partial" amount only affects the DB-recorded figure here —
+            // if the contract's actual balance is short, the real call would
+            // panic ("Insufficient funds in contract for full payout")
+            // rather than silently pay a reduced amount.
+            expect(mockSorobanPayout).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID, 'PUB_u1');
+            expect(prisma.payout.create).toHaveBeenCalledWith({
+                data: expect.objectContaining({ amount: '20' }), // 2 contributors * 10, not the full 3 * 10 = 30 pool
+            });
         });
     });
 
@@ -392,30 +490,59 @@ describe('PayoutService', () => {
     });
 
     describe('refundMember', () => {
-        it('sends a treasury transfer for a positive net position and returns the tx hash', async () => {
+        it('is a no-op for a zero or negative amount', async () => {
+            const result = await payoutService.refundMember('g1', 'u2', '0');
+
+            expect(result).toBeNull();
+            expect(prisma.savingsGroup.findUnique).not.toHaveBeenCalled();
+            expect(mockSorobanWithdrawSavings).not.toHaveBeenCalled();
+        });
+
+        it('is a no-op for Rotational groups: the pool is already fully distributed each cycle', async () => {
+            // Only the *current* cycle's contribution is refundable, and
+            // remove_member() already handles that automatically — any
+            // earlier-cycle net position has already been paid out to a
+            // previous recipient, so there's no sound on-chain mechanism to
+            // refund it from here.
             const group = {
                 id: 'g1',
+                groupType: 'Rotational',
+                stellarContractId: CONTRACT_ID,
                 members: [makeMember('u1', 'CREATOR'), makeMember('u2', 'MEMBER')],
             };
             prisma.savingsGroup.findUnique.mockResolvedValueOnce(group);
 
             const result = await payoutService.refundMember('g1', 'u2', '15');
 
-            expect(mockSorobanPayout).toHaveBeenCalledWith('TEST_TREASURY_SECRET', 'PUB_u2', '15');
-            expect(result).toEqual({ hash: 'tx_hash_1' });
+            expect(result).toBeNull();
+            expect(mockSorobanWithdrawSavings).not.toHaveBeenCalled();
         });
 
-        it('is a no-op for a zero or negative amount', async () => {
-            const result = await payoutService.refundMember('g1', 'u2', '0');
+        it('withdraws the net position for a GoalBased group, signed by the member themselves', async () => {
+            const group = {
+                id: 'g1',
+                groupType: 'GoalBased',
+                stellarContractId: CONTRACT_ID,
+                members: [makeMember('u1', 'CREATOR'), makeMember('u2', 'MEMBER')],
+            };
+            prisma.savingsGroup.findUnique.mockResolvedValueOnce(group);
 
-            expect(result).toBeNull();
-            expect(prisma.savingsGroup.findUnique).not.toHaveBeenCalled();
-            expect(mockSorobanPayout).not.toHaveBeenCalled();
+            const result = await payoutService.refundMember('g1', 'u2', '15');
+
+            expect(mockSorobanWithdrawSavings).toHaveBeenCalledWith(
+                expect.any(StellarSdk.Keypair),
+                CONTRACT_ID,
+                memberTestKeypair.publicKey(),
+                150_000_000n, // 15 XLM in stroops
+            );
+            expect(result).toEqual({ hash: 'withdraw_tx_hash' });
         });
 
         it('throws when the member has no configured wallet', async () => {
             const group = {
                 id: 'g1',
+                groupType: 'GoalBased',
+                stellarContractId: CONTRACT_ID,
                 members: [makeMember('u1', 'CREATOR', { stellarWallet: null })],
             };
             prisma.savingsGroup.findUnique.mockResolvedValueOnce(group);
@@ -425,20 +552,18 @@ describe('PayoutService', () => {
             );
         });
 
-        it('throws when no treasury signer is configured', async () => {
+        it('throws when the group has no deployed contract', async () => {
             const group = {
                 id: 'g1',
+                groupType: 'GoalBased',
+                stellarContractId: null,
                 members: [makeMember('u1', 'CREATOR')],
             };
             prisma.savingsGroup.findUnique.mockResolvedValueOnce(group);
-            const original = config.GROUP_TREASURY_SECRET;
-            config.GROUP_TREASURY_SECRET = '';
 
             await expect(payoutService.refundMember('g1', 'u1', '10')).rejects.toThrow(
-                'No treasury signer configured',
+                'has no deployed contract',
             );
-
-            config.GROUP_TREASURY_SECRET = original;
         });
     });
 
@@ -521,6 +646,7 @@ describe('PayoutService', () => {
                 contributionAmount: 10,
                 currentPayoutIndex: 0,
                 totalCycles: 0,
+                stellarContractId: CONTRACT_ID,
                 currentCycleStart: null,
                 currentCycleEnd: null,
                 payoutOrder: ['u1', 'u2'],
@@ -547,6 +673,7 @@ describe('PayoutService', () => {
                 contributionAmount: 10,
                 currentPayoutIndex: 0,
                 totalCycles: 0,
+                stellarContractId: CONTRACT_ID,
                 currentCycleStart: null,
                 currentCycleEnd: null,
                 payoutOrder: ['u1', 'u2'],
@@ -565,7 +692,7 @@ describe('PayoutService', () => {
     });
 
     describe('full rotation integration', () => {
-        it('runs a full 5-member Ajo cycle: 5 payouts then a cycle reset', async () => {
+        it('runs a full 5-member Ajo cycle: 5 payouts, 5 per-payout cycle resets, then 1 rotation reset', async () => {
             const memberIds = ['u1', 'u2', 'u3', 'u4', 'u5'];
             const members = memberIds.map((id, i) => makeMember(id, i === 0 ? 'CREATOR' : 'MEMBER'));
 
@@ -576,6 +703,7 @@ describe('PayoutService', () => {
                 contributionAmount: 10,
                 currentPayoutIndex: 0,
                 totalCycles: 0,
+                stellarContractId: CONTRACT_ID,
                 payoutOrder: memberIds,
                 members,
             };
@@ -599,9 +727,11 @@ describe('PayoutService', () => {
 
             expect(mockSorobanPayout).toHaveBeenCalledTimes(5);
             memberIds.forEach((id) => {
-                expect(mockSorobanPayout).toHaveBeenCalledWith('TEST_TREASURY_SECRET', `PUB_${id}`, '50');
+                expect(mockSorobanPayout).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID, `PUB_${id}`);
             });
-            expect(mockSorobanResetCycle).toHaveBeenCalledTimes(1);
+            // reset_cycle() runs after every payout; reset_rotation() only once, at the end.
+            expect(mockSorobanResetCycle).toHaveBeenCalledTimes(5);
+            expect(mockSorobanResetRotation).toHaveBeenCalledTimes(1);
             expect(state.totalCycles).toBe(1);
             expect(state.currentPayoutIndex).toBe(0);
         });

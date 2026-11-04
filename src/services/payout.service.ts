@@ -1,10 +1,32 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
+import * as StellarSdk from '@stellar/stellar-sdk';
 import { WhatsAppService } from './whatsapp.service';
 import { SorobanService } from './soroban.service';
 import { config } from '../config/env';
 import { enqueueCycleEnd } from '../queue/contribution-scheduler.queue';
+import { xlmToStroops } from '../utils/stellar-amount.util';
+import { decrypt } from '../utils/encryption.util';
+import { registerSecret, unregisterSecret } from '../utils/secret-registry';
 
 const prisma = new PrismaClient();
+
+/**
+ * Builds the keypair for the contract's on-chain admin. This must be the
+ * exact identity passed as `admin` to initialize() (see
+ * SorobanService.deployGroupContract) — payout() and remove_member() both
+ * check admin.require_auth_for_args against it.
+ */
+function getAdminKeypair(): StellarSdk.Keypair {
+    if (!config.DEPLOYER_SECRET_KEY) {
+        throw new Error('No admin signer configured — set DEPLOYER_SECRET_KEY to enable payouts and member removal.');
+    }
+    const seed = StellarSdk.StrKey.decodeEd25519SecretSeed(config.DEPLOYER_SECRET_KEY);
+    try {
+        return StellarSdk.Keypair.fromRawEd25519Seed(seed);
+    } finally {
+        seed.fill(0);
+    }
+}
 
 export class PayoutOrderLockedError extends Error {
     constructor() {
@@ -246,11 +268,23 @@ export class PayoutService {
     }
 
     /**
-     * Sends a one-off Stellar transfer from the group treasury to a member —
-     * used to settle a positive net position (totalContributed - totalReceived)
-     * when the member exits the group. Unlike executePayout(), this does not
-     * touch the rotation index, cycle count, or Payout table: it's a settlement,
+     * Settles a positive net position (totalContributed - totalReceived) when
+     * a member exits the group. Unlike executePayout(), this does not touch
+     * the rotation index, cycle count, or Payout table: it's a settlement,
      * not a rotation payout.
+     *
+     * Only GoalBased groups have a sound on-chain mechanism for this: the
+     * member calls withdraw_savings() themselves against their own recorded
+     * total_contributions. Rotational groups have no such primitive — each
+     * cycle's pool is paid out in full to that cycle's one recipient as soon
+     * as it's collected, so a net position from an *earlier, already-settled*
+     * cycle isn't sitting in the contract's balance to refund; only the
+     * *current* cycle's contribution is refundable, and remove_member()
+     * already does that automatically as part of removing the member. Calling
+     * this for a Rotational group therefore does not attempt an on-chain
+     * transfer — the computed netOwed is still recorded in MemberExitLog by
+     * the caller, but as a settlement to resolve manually, not an automatic
+     * payment.
      */
     public async refundMember(groupId: string, userId: string, amount: string): Promise<{ hash: string } | null> {
         if (parseFloat(amount) <= 0) return null;
@@ -261,19 +295,45 @@ export class PayoutService {
         });
         if (!group) throw new Error('Group not found');
 
+        if (((group as any).groupType ?? 'Rotational') !== 'GoalBased') {
+            return null;
+        }
+
         const member = group.members.find((m: any) => m.userId === userId);
         if (!member?.user?.stellarWallet) {
             throw new Error(`Member ${userId} has no configured wallet; cannot process refund.`);
         }
-
-        if (!config.GROUP_TREASURY_SECRET) {
-            throw new Error('No treasury signer configured — set GROUP_TREASURY_SECRET to enable refunds.');
+        if (!group.stellarContractId) {
+            throw new Error(`Group ${groupId} has no deployed contract; cannot process refund.`);
         }
 
-        const recipientPublicKey = JSON.parse(member.user.stellarWallet).publicKey;
-        const { hash } = await (this.sorobanService as any).payout(config.GROUP_TREASURY_SECRET, recipientPublicKey, amount);
+        const memberWallet = JSON.parse(member.user.stellarWallet);
+        let memberSecret: Buffer | null = null;
+        try {
+            memberSecret = decrypt(
+                memberWallet.encryptedSecret,
+                memberWallet.iv,
+                memberWallet.authTag,
+                memberWallet.keyVersion || member.user.encryptionKeyVersion,
+            );
+            registerSecret(memberSecret);
+            const memberKeypair = StellarSdk.Keypair.fromRawEd25519Seed(memberSecret);
+            const amountStroops = xlmToStroops(amount);
 
-        return { hash };
+            const { hash } = await this.sorobanService.withdrawSavings(
+                memberKeypair,
+                group.stellarContractId,
+                memberKeypair.publicKey(),
+                amountStroops,
+            );
+
+            return { hash };
+        } finally {
+            if (memberSecret) {
+                unregisterSecret(memberSecret);
+                memberSecret.fill(0);
+            }
+        }
     }
 
     /**
@@ -304,12 +364,24 @@ export class PayoutService {
         return newOrder;
     }
 
+    /**
+     * Executes the contract's payout() for the next recipient in rotation.
+     *
+     * `amountOverride` only affects the amount recorded on the DB Payout
+     * row — the contract itself always transfers its own computed pool
+     * (contribution_amount × the cycle's frozen member count) from its own
+     * balance; there is no on-chain partial-payout mechanism. If called via
+     * proceedWithPartialPool() while the contract's balance is short of the
+     * full pool, the on-chain call panics ("Insufficient funds in contract
+     * for full payout") rather than silently paying a reduced amount.
+     */
     public async executePayout(groupId: string, amountOverride?: string): Promise<any> {
         const group = await prisma.savingsGroup.findUnique({
             where: { id: groupId },
             include: { members: { orderBy: { joinedAt: 'asc' }, include: { user: true } } },
         });
         if (!group) throw new Error('Group not found');
+        if (!group.stellarContractId) throw new Error(`Group ${groupId} has no deployed contract; cannot execute payout.`);
 
         const order = this.resolveOrder(group);
         if (order.length === 0) throw new Error('Group has no members to pay out to.');
@@ -330,13 +402,15 @@ export class PayoutService {
         }
 
         const recipientPublicKey = JSON.parse(recipientMember.user.stellarWallet).publicKey;
-        const amount = amountOverride ?? String(parseFloat(String(group.contributionAmount)) * order.length);
+        const amount = amountOverride ?? new Prisma.Decimal(group.contributionAmount).times(order.length).toString();
 
-        if (!config.GROUP_TREASURY_SECRET) {
-            throw new Error('No treasury signer configured — set GROUP_TREASURY_SECRET to enable automatic payouts.');
-        }
+        const adminKeypair = getAdminKeypair();
+        const { hash } = await this.sorobanService.payout(adminKeypair, group.stellarContractId, recipientPublicKey);
 
-        const { hash } = await (this.sorobanService as any).payout(config.GROUP_TREASURY_SECRET, recipientPublicKey, amount);
+        // Every payout ends a contract-side contribution cycle (finer-grained
+        // than the backend's own "cycle" = one full rotation) — advance it so
+        // the next round of contribute() calls isn't rejected as a repeat.
+        await this.sorobanService.resetCycle(adminKeypair, group.stellarContractId);
 
         const payout = await prisma.payout.create({
             data: {
@@ -365,11 +439,19 @@ export class PayoutService {
         return payout;
     }
 
+    /**
+     * Called once every member has received a payout this rotation. Resets
+     * the on-chain rotation index (NextPayoutIndex) back to the first
+     * member — the per-payout contract cycle was already advanced by
+     * resetCycle() in executePayout(), so this calls reset_rotation(), not
+     * reset_cycle() again.
+     */
     public async completeCycle(groupId: string): Promise<void> {
         const group = await prisma.savingsGroup.findUnique({ where: { id: groupId } });
         if (!group) throw new Error('Group not found');
+        if (!group.stellarContractId) throw new Error(`Group ${groupId} has no deployed contract; cannot reset rotation.`);
 
-        await (this.sorobanService as any).resetCycle(groupId);
+        await this.sorobanService.resetRotation(getAdminKeypair(), group.stellarContractId);
 
         const newTotalCycles = (group as any).totalCycles + 1;
         await prisma.savingsGroup.update({
