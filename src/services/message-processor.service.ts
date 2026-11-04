@@ -13,6 +13,7 @@ import { t, isSupportedLanguage, loadLocale } from './locale.service';
 import { redisClient } from '../lib/redis';
 import { registerSecret, unregisterSecret, zeroAllInFlightSecrets } from '../utils/secret-registry';
 import { logSecretAccess } from '../utils/audit-logger';
+import { xlmToStroops } from '../utils/stellar-amount.util';
 
 export class MessageProcessor {
     private whatsappService: WhatsAppService;
@@ -848,8 +849,7 @@ export class MessageProcessor {
             const memberPublicKey = memberKeypair.publicKey();
 
             // Convert XLM amount (decimal) to stroops (i128) for the Soroban contract.
-            // 1 XLM = 10_000_000 stroops.
-            const amountStroops = BigInt(Math.round(parseFloat(amountStr) * 10_000_000));
+            const amountStroops = xlmToStroops(amountStr);
 
             await this.whatsappService.sendMessage(
                 from,
