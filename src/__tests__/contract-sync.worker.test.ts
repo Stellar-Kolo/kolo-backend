@@ -39,6 +39,7 @@ jest.mock('../queue/contract-sync.queue', () => ({
 const prismaMocks = {
     findManyGroups: jest.fn(),
     findManyContributions: jest.fn(),
+    findManyWithdrawals: jest.fn(),
     create: jest.fn(),
     findFirstMismatch: jest.fn(),
 };
@@ -47,6 +48,7 @@ jest.mock('@prisma/client', () => {
     const mockFns = {
         findManyGroups: jest.fn(),
         findManyContributions: jest.fn(),
+        findManyWithdrawals: jest.fn(),
         create: jest.fn(),
         findFirstMismatch: jest.fn(),
     };
@@ -56,6 +58,7 @@ jest.mock('@prisma/client', () => {
         PrismaClient: jest.fn().mockImplementation(() => ({
             savingsGroup: { findMany: (...args: any[]) => (global as any).__prismaMocks.findManyGroups(...args) },
             contribution: { findMany: (...args: any[]) => (global as any).__prismaMocks.findManyContributions(...args) },
+            withdrawal: { findMany: (...args: any[]) => (global as any).__prismaMocks.findManyWithdrawals(...args) },
             reconciliationMismatch: {
                 create: (...args: any[]) => (global as any).__prismaMocks.create(...args),
                 findFirst: (...args: any[]) => (global as any).__prismaMocks.findFirstMismatch(...args),
@@ -75,6 +78,7 @@ function getMocks() {
     return (global as any).__prismaMocks as {
         findManyGroups: jest.Mock;
         findManyContributions: jest.Mock;
+        findManyWithdrawals: jest.Mock;
         create: jest.Mock;
         findFirstMismatch: jest.Mock;
     };
@@ -112,11 +116,13 @@ describe('runReconciliation()', () => {
         const m = getMocks();
         m.findManyGroups.mockReset();
         m.findManyContributions.mockReset();
+        m.findManyWithdrawals.mockReset();
         m.create.mockReset();
         m.findFirstMismatch.mockReset();
         // Safe defaults so tests that don't configure these don't throw
         m.findManyGroups.mockResolvedValue([]);
         m.findManyContributions.mockResolvedValue([]);
+        m.findManyWithdrawals.mockResolvedValue([]);
         m.create.mockResolvedValue({ id: 'mm_default' });
         // No pre-existing unresolved mismatch unless a test says otherwise
         m.findFirstMismatch.mockResolvedValue(null);
@@ -161,6 +167,32 @@ describe('runReconciliation()', () => {
 
         expect(summary.mismatchesFound).toBe(0);
         expect(getMocks().create).not.toHaveBeenCalled();
+    });
+
+    it('subtracts completed withdrawals from the DB total (GoalBased groups)', async () => {
+        getMocks().findManyGroups.mockResolvedValue([makeGroup()]);
+        getMocks().findManyContributions.mockResolvedValue([{ amount: 10 }]); // 10 XLM contributed
+        getMocks().findManyWithdrawals.mockResolvedValue([{ amount: 4 }]); // 4 XLM withdrawn
+        // withdraw_savings() debits total_contributions on-chain too, so the
+        // on-chain side reflects the same net 6 XLM = 60_000_000 stroops.
+        mockSorobanService.queryContribution.mockResolvedValue(60_000_000n);
+
+        const summary = await runReconciliation(mockSorobanService as any);
+
+        expect(summary.mismatchesFound).toBe(0);
+        expect(getMocks().create).not.toHaveBeenCalled();
+    });
+
+    it('flags a mismatch when a withdrawal is recorded on-chain but not yet in the DB', async () => {
+        getMocks().findManyGroups.mockResolvedValue([makeGroup()]);
+        getMocks().findManyContributions.mockResolvedValue([{ amount: 10 }]);
+        getMocks().findManyWithdrawals.mockResolvedValue([]); // DB hasn't recorded the withdrawal yet
+        mockSorobanService.queryContribution.mockResolvedValue(60_000_000n); // but on-chain already reflects it
+
+        const summary = await runReconciliation(mockSorobanService as any);
+
+        expect(summary.mismatchesFound).toBe(1);
+        expect(getMocks().create).toHaveBeenCalledTimes(1);
     });
 
     it('applies 1-stroop tolerance for floating-point rounding', async () => {

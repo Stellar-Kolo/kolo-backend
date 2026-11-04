@@ -5,7 +5,8 @@
  * Soroban contract, it:
  *   1. Fetches each member's on-chain contribution via get_contribution(),
  *      a lifetime-cumulative total.
- *   2. Sums that member's COMPLETED Contribution records across all cycles.
+ *   2. Sums that member's COMPLETED Contribution records across all cycles,
+ *      minus any COMPLETED Withdrawal records (GoalBased groups only).
  *   3. Flags any divergence as a ReconciliationMismatch record.
  *   4. Does NOT auto-fix — mismatches require admin review.
  *
@@ -129,27 +130,31 @@ export async function runReconciliation(sorobanService: SorobanService): Promise
             // against a single-cycle DB window produced a false mismatch for any
             // member who had already contributed in an earlier, completed cycle.
             //
-            // Withdrawals and emergency-withdraws are not reachable through any
-            // current backend flow (handleWithdraw() is a stub that never invokes
-            // the contract), so they are not modeled as debits here. A member who
-            // has exited is excluded from this scan entirely (see the query
-            // above) rather than modeled as a refund debit, since remove_member()
-            // zeroes their on-chain total and their settlement is already
-            // recorded in MemberExitLog.
+            // withdraw_savings() debits total_contributions on-chain (GoalBased
+            // groups only), so completed Withdrawal rows are subtracted here too
+            // — otherwise every withdrawal would show up as a false mismatch.
+            // emergency_withdraw() isn't reachable from any current backend flow,
+            // so it's not modeled. A member who has exited is excluded from this
+            // scan entirely (see the query above) rather than modeled as a refund
+            // debit, since remove_member() zeroes their on-chain total and their
+            // settlement is already recorded in MemberExitLog.
             //
             // Each row is converted individually with xlmToStroops (exact
             // string/integer arithmetic) and summed as bigint, so this side of
             // the comparison never passes through floating point either.
             let dbStroops: bigint;
             try {
-                const dbContributions = await prisma.contribution.findMany({
-                    where: {
-                        userId: member.id,
-                        groupId: group.id,
-                        status: 'COMPLETED',
-                    },
-                });
-                dbStroops = dbContributions.reduce((acc, c) => acc + xlmToStroops(String(c.amount)), 0n);
+                const [dbContributions, dbWithdrawals] = await Promise.all([
+                    prisma.contribution.findMany({
+                        where: { userId: member.id, groupId: group.id, status: 'COMPLETED' },
+                    }),
+                    prisma.withdrawal.findMany({
+                        where: { userId: member.id, groupId: group.id, status: 'COMPLETED' },
+                    }),
+                ]);
+                const contributedStroops = dbContributions.reduce((acc, c) => acc + xlmToStroops(String(c.amount)), 0n);
+                const withdrawnStroops = dbWithdrawals.reduce((acc, w) => acc + xlmToStroops(String(w.amount)), 0n);
+                dbStroops = contributedStroops - withdrawnStroops;
             } catch (err: any) {
                 summary.errors.push(
                     `[group=${group.id}] failed to total DB contributions for user ${member.id}: ${err.message}`,
