@@ -6,6 +6,7 @@ import {
     InvalidPayoutOrderError,
 } from '../services/payout.service';
 import { config } from '../config/env';
+import { xlmToStroops } from '../utils/stellar-amount.util';
 
 jest.mock('@prisma/client', () => {
     const mPrismaClient = {
@@ -246,9 +247,9 @@ describe('PayoutService', () => {
 
             await payoutService.executePayout('g1');
 
-            // payout() takes no amount — the contract computes its own pool
-            // size (contribution_amount × frozen member count) internally.
-            expect(mockSorobanPayout).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID, 'PUB_u2');
+            // A full payout passes no amount — the contract computes its own
+            // pool size (contribution_amount × frozen member count) internally.
+            expect(mockSorobanPayout).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID, 'PUB_u2', undefined);
             expect(prisma.payout.create).toHaveBeenCalledWith({
                 data: expect.objectContaining({ recipientId: 'u2', cycleNumber: 1, amount: '30' }),
             });
@@ -407,13 +408,9 @@ describe('PayoutService', () => {
 
             await payoutService.proceedWithPartialPool('g1');
 
-            // The contract has no partial-payout mechanism: it always
-            // transfers its own computed full pool from its own balance, so
-            // the "partial" amount only affects the DB-recorded figure here —
-            // if the contract's actual balance is short, the real call would
-            // panic ("Insufficient funds in contract for full payout")
-            // rather than silently pay a reduced amount.
-            expect(mockSorobanPayout).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID, 'PUB_u1');
+            // The partial amount is passed on-chain too, so the DB-recorded
+            // figure matches what the contract actually transferred.
+            expect(mockSorobanPayout).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID, 'PUB_u1', xlmToStroops('20'));
             expect(prisma.payout.create).toHaveBeenCalledWith({
                 data: expect.objectContaining({ amount: '20' }), // 2 contributors * 10, not the full 3 * 10 = 30 pool
             });
@@ -727,7 +724,7 @@ describe('PayoutService', () => {
 
             expect(mockSorobanPayout).toHaveBeenCalledTimes(5);
             memberIds.forEach((id) => {
-                expect(mockSorobanPayout).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID, `PUB_${id}`);
+                expect(mockSorobanPayout).toHaveBeenCalledWith(expect.any(StellarSdk.Keypair), CONTRACT_ID, `PUB_${id}`, undefined);
             });
             // reset_cycle() runs after every payout; reset_rotation() only once, at the end.
             expect(mockSorobanResetCycle).toHaveBeenCalledTimes(5);

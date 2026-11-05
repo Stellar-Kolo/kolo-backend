@@ -285,15 +285,25 @@ describe('SorobanService.payout()', () => {
         service.server = mockServer;
     });
 
-    it('builds and submits a payout(expected_recipient) invocation with no amount argument, signed by the admin keypair', async () => {
-        const result = await service.payout(adminKeypair, contractId, recipientPublicKey, mockServer);
+    it('builds and submits a payout(expected_recipient, None) invocation when no amount is given, signed by the admin keypair', async () => {
+        const result = await service.payout(adminKeypair, contractId, recipientPublicKey, undefined, mockServer);
 
         expect(result).toEqual({ hash: 'payout_hash_1', status: 'SUCCESS' });
         expect(mockServer.getAccount).toHaveBeenCalledWith(adminKeypair.publicKey());
 
         const invokeOp = (service as any).server.simulateTransaction.mock.calls[0][0].operations[0];
         expect(invokeOp.func.value().functionName().toString()).toBe('payout');
-        expect(invokeOp.func.value().args()).toHaveLength(1);
+        const args = invokeOp.func.value().args();
+        expect(args).toHaveLength(2);
+        expect(args[1].switch().name).toBe('scvVoid');
+    });
+
+    it('encodes an explicit partial amount as Some(i128), not void', async () => {
+        await service.payout(adminKeypair, contractId, recipientPublicKey, 150_000_000n, mockServer);
+
+        const invokeOp = (service as any).server.simulateTransaction.mock.calls[0][0].operations[0];
+        const args = invokeOp.func.value().args();
+        expect(args[1].switch().name).toBe('scvI128');
     });
 
     it('throws when the on-chain transaction FAILED (e.g. insufficient pool funds)', async () => {
@@ -301,7 +311,7 @@ describe('SorobanService.payout()', () => {
         mockServer.getTransaction.mockResolvedValue({ status: 'FAILED' });
 
         await expect(
-            service.payout(adminKeypair, contractId, recipientPublicKey, mockServer),
+            service.payout(adminKeypair, contractId, recipientPublicKey, undefined, mockServer),
         ).rejects.toThrow('Transaction failed on ledger: payout_fail_hash');
     });
 });

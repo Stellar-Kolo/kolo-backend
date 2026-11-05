@@ -367,13 +367,13 @@ export class PayoutService {
     /**
      * Executes the contract's payout() for the next recipient in rotation.
      *
-     * `amountOverride` only affects the amount recorded on the DB Payout
-     * row — the contract itself always transfers its own computed pool
-     * (contribution_amount × the cycle's frozen member count) from its own
-     * balance; there is no on-chain partial-payout mechanism. If called via
-     * proceedWithPartialPool() while the contract's balance is short of the
-     * full pool, the on-chain call panics ("Insufficient funds in contract
-     * for full payout") rather than silently paying a reduced amount.
+     * `amountOverride` (set by proceedWithPartialPool() when not every member
+     * contributed this cycle) is passed on-chain as payout()'s explicit
+     * amount, so the DB-recorded amount always matches what the contract
+     * actually transferred. The contract still rejects it if it exceeds the
+     * full computed pool (contribution_amount × the cycle's frozen member
+     * count) or the contract's own balance — a partial payout can only ever
+     * be smaller than the full pool, never larger.
      */
     public async executePayout(groupId: string, amountOverride?: string): Promise<any> {
         const group = await prisma.savingsGroup.findUnique({
@@ -405,7 +405,13 @@ export class PayoutService {
         const amount = amountOverride ?? new Prisma.Decimal(group.contributionAmount).times(order.length).toString();
 
         const adminKeypair = getAdminKeypair();
-        const { hash } = await this.sorobanService.payout(adminKeypair, group.stellarContractId, recipientPublicKey);
+        // amountOverride (from proceedWithPartialPool()) is passed on-chain too,
+        // so the DB-recorded amount always matches what the contract actually
+        // transferred — payout() still bounds it above by the full computed
+        // pool and by its own balance. Full payouts pass no amount, letting
+        // the contract compute its own pool size.
+        const amountStroops = amountOverride ? xlmToStroops(amountOverride) : undefined;
+        const { hash } = await this.sorobanService.payout(adminKeypair, group.stellarContractId, recipientPublicKey, amountStroops);
 
         // Every payout ends a contract-side contribution cycle (finer-grained
         // than the backend's own "cycle" = one full rotation) — advance it so

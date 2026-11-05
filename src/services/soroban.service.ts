@@ -527,18 +527,22 @@ try {
     }
 
     /**
-     * Invokes the Soroban contract's `payout(expected_recipient)` function —
-     * pays the next member in rotation order. The contract computes the pool
-     * size itself (contribution_amount × the cycle's frozen member count) and
-     * transfers it from its own balance; there is no amount parameter to pass.
+     * Invokes the Soroban contract's `payout(expected_recipient, amount)`
+     * function — pays the next member in rotation order. Passing
+     * `amountStroops` undefined/null requests the full computed pool
+     * (contribution_amount × the cycle's frozen member count); passing a
+     * value requests a partial payout, which the contract still bounds above
+     * by that same full pool and by its own balance.
      *
      * Signed by the admin keypair (the same identity passed as `admin` to
      * initialize() — see deployGroupContract()), since the contract checks
-     * `admin.require_auth_for_args` against the recipient address.
+     * `admin.require_auth_for_args` against both the recipient address and
+     * the amount.
      *
      * @param adminKeypair       Keypair matching the contract's on-chain admin.
      * @param contractId         Soroban contract address (C... strkey).
      * @param recipientPublicKey Stellar G... public key of the expected next recipient.
+     * @param amountStroops      Optional partial-payout amount, in stroops.
      * @param server             Optional RPC server override.
      * @returns `{ hash, status }` from `submitTransaction()`.
      */
@@ -546,6 +550,7 @@ try {
         adminKeypair: StellarSdk.Keypair,
         contractId: string,
         recipientPublicKey: string,
+        amountStroops?: bigint | null,
         server?: StellarSdk.rpc.Server
     ): Promise<{ hash: string; status: 'SUCCESS' | 'PENDING' }> {
         const srv = server || this.server;
@@ -553,6 +558,7 @@ try {
 
         const args = [
             new StellarSdk.Address(recipientPublicKey).toScVal(),
+            optionToScVal(amountStroops, (v) => StellarSdk.nativeToScVal(v, { type: 'i128' })),
         ];
 
         const invokeOp = StellarSdk.Operation.invokeContractFunction({
