@@ -379,7 +379,10 @@ try {
             // for in that flow, so every later admin-authorized call would
             // fail its require_auth_for_args check.
             const admin = deployerKeypair.publicKey();
-            const usdcTokenAddress = config.USDC_TOKEN_ADDRESS || 'CCW67TSBXSHOMEVDBLAEXGPSDMT2OVL4TJBB25KVEA2MOWFK76OO5SS7';
+            if (!config.USDC_TOKEN_ADDRESS) {
+                throw new Error('USDC_TOKEN_ADDRESS must be configured with a valid Soroban token contract before deploying a savings group.');
+            }
+            const usdcTokenAddress = config.USDC_TOKEN_ADDRESS;
 
             try {
                 // 1. Load WASM
