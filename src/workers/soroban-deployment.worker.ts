@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import { sorobanService } from '../services/soroban.service';
 import { observabilityService } from '../services/observability.service';
 import { applyEncryptionMiddleware } from '../middleware/prisma-encryption.middleware';
+import { xlmToStroops } from '../utils/stellar-amount.util';
 
 const prisma = new PrismaClient();
 applyEncryptionMiddleware(prisma);
@@ -35,12 +36,22 @@ export function startSorobanDeploymentWorker(): void {
             });
 
             try {
+                // group.contributionAmount/targetAmount are human-readable
+                // XLM/USDC decimal amounts (e.g. "10"), but every on-chain
+                // contribution/withdrawal/payout call encodes amounts in
+                // stroops (× 10^7) via xlmToStroops(). The contract compares
+                // contribute()'s amount directly against whatever was stored
+                // here at initialize() time, so this must be converted the
+                // same way or every contribution would panic with "Must
+                // contribute the exact amount" against an unconverted raw
+                // value like 10 instead of 100_000_000.
+                const targetAmountStr = (group as any).targetAmount?.toString();
                 const result = await sorobanService.deployGroupContract({
                     groupId: group.id,
                     name: group.name,
-                    contributionAmount: group.contributionAmount.toString(),
+                    contributionAmount: xlmToStroops(group.contributionAmount.toString()),
                     groupType: (group as any).groupType ?? 'Rotational',
-                    targetAmount: (group as any).targetAmount?.toString() ?? null,
+                    targetAmount: targetAmountStr ? xlmToStroops(targetAmountStr) : null,
                     lockUntilTarget: (group as any).lockUntilTarget ?? false,
                 });
 
